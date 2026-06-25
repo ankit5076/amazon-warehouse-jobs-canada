@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="popup.4802baad3772.css">
+    </head>
+<body>
+    <section class="popup-container">
+        <header>
+            <div class="brand-lockup">
+                <img src="assets/images/amazon.png" alt="Fastrack amazon jobs" class="logo">
+                <h1>Fastrack amazon jobs <span id="version"></span></h1>
+            </div>
+            <div class="header-controls">
+                <div class="toggle-section">
+                    <label for="log_mode">Logs</label>
+                    <select id="log_mode" class="log-mode-select" title="Console log mode">
+                        <option value="standard">Standard</option>
+                        <option value="debug">Debug</option>
+                        <option value="off">Off</option>
+                    </select>
+                </div>
+                <div class="toggle-section">
+                    <label for="activate">Activate</label>
+                    <label class="switch">
+                        <input type="checkbox" id="activate" disabled>
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+        </header>
+        <div class="dashboard">
+            <div class="dropdowns-container">
+                <label class="field field-full" for="city">
+                    <span>City</span>
+                    <select id="city" name="city"></select>
+                </label>
+                <label class="field" for="distance">
+                    <span>Distance (km)</span>
+                    <select id="distance" name="distance"></select>
+                </label>
+                <div class="field field-job-types">
+                    <div class="field-header">
+                        <label for="jobType">Job Type</label>
+                        <button type="button" id="select-all-job-types">All job types</button>
+                    </div>
+                    <select id="jobType" name="jobType" multiple size="4"></select>
+                </div>
+                <div class="field field-full">
+                    <label for="fetch_interval_value">Fetch Interval</label>
+                    <div class="fetch-interval-container">
+                        <input type="number" id="fetch_interval_value" title="Fetch Interval Value" name="fetch_interval_value" min="1" class="fetch-interval-input">
+                        <select id="fetch_interval_unit" title="Fetch Interval Unit" name="fetch_interval_unit" class="fetch-interval-unit">
+                            <option value="ms" selected>Milliseconds</option>
+                            <option value="s">Seconds</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="field field-full mode-field">
+                    <div class="mode-copy">
+                        <span>Application Mode</span>
+                        <strong id="direct_application_mode_label">Automated</strong>
+                    </div>
+                    <label class="switch" for="use_direct_application" title="Automated uses the direct API flow. Manual uses Amazon's native Create Application button.">
+                        <input type="checkbox" id="use_direct_application" checked aria-label="Use direct application" title="Use direct application mode">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="tag-input-container">
+                <div class="tag-input-header">
+                    <label for="city-input">City Filters</label>
+                    <div class="tag-input-actions">
+                        <span id="city-scope-status" class="city-scope-status">City specific</span>
+                        <button type="button" id="add-all-cities">All cities</button>
+                        <span id="clear-all">Clear all</span>
+                    </div>
+                </div>
+                <div id="tag-input-box">
+                    <input type="text" id="city-input" placeholder="Type a city and press enter">
+                </div>
+            </div>
+            <div class="popup-footer">
+                <p class="autosave-text">Changes are autosaved.</p>
+                <form class="button-form" name="refresh_info" id="refresh_info">
+                    <button id="refresh_btn" type="submit" class="button configure">Refresh</button>
+                </form>
+                <form class="button-form" name="ais_visa_info" id="ais_visa_info">
+                    <button id="reset_info" type="submit" class="button configure">Reset</button>
+                </form>
+            </div>
+        </div>
+    </section>
+        <script src="popup.e55a7536a53d.js"></script>
+</body>
+</html>

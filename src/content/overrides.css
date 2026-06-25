@@ -1,0 +1,26 @@
+.swal2-modal :is(h2, p) {
+  color: initial;
+  margin: 0;
+  line-height: 1.25;
+}
+
+.swal2-modal p + p {
+  margin-top: 1rem;
+}
+
+#consulate_date_time,
+#asc_date_time {
+  display: block !important;
+}
+
+.swal2-select {
+  width: auto !important;
+}
+
+.swal2-timer-progress-bar {
+  background: rgba(255, 255, 255, 0.6) !important;
+}
+
+.swal2-toast.swal2-show {
+  background: rgba(0, 0, 0, 0.75) !important;
+}

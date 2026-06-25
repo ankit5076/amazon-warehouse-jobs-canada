@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Amazon Shifts Bundling"
+  short_description: "Validate MV3 dist and WAF bridge output"
+  default_prompt: "Use $verify-amazon-shifts-bundling to run the Amazon Shifts tests and bundling verifier after code changes."

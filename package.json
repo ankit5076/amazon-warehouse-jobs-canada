@@ -1,0 +1,22 @@
+{
+  "name": "amazon-shifts-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Test harness for the Fastrack amazon jobs Chrome extension shared modules.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "build": "node scripts/build.js",
+    "verify:bundle": "node scripts/verify-bundling.js",
+    "package": "node scripts/build.js --zip"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.9",
+    "archiver": "^7.0.1",
+    "esbuild": "^0.28.0",
+    "javascript-obfuscator": "^4.1.1",
+    "jsdom": "^25.0.1",
+    "vitest": "^2.1.9"
+  }
+}

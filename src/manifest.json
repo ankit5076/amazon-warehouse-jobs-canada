@@ -1,0 +1,144 @@
+{
+  "action": {
+    "default_popup": "popup/index.html",
+    "default_icon": {
+      "16": "assets/images/amazon.png",
+      "48": "assets/images/amazon.png",
+      "128": "assets/images/amazon.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "shared/constants.js",
+        "shared/utils/logger.js",
+        "shared/utils/text.js",
+        "shared/utils/storage.js",
+        "shared/utils/url.js",
+        "shared/utils/messaging.js",
+        "content/utils/application-observability.js",
+        "content/utils/alerts.js",
+        "content/utils/direct-application-api.js",
+        "content/utils/direct-application-guard.js",
+        "content/utils/direct-application-mode.js",
+        "content/utils/direct-application-waf.js",
+        "content/utils/direct-application.js"
+      ],
+      "matches": [
+        "https://hiring.amazon.ca/application*",
+        "https://hiring.amazon.com/application*"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "css": [
+        "vendor/sweetalert.css",
+        "popup/popup.css",
+        "content/overrides.css"
+      ],
+      "js": [
+        "shared/constants.js",
+        "shared/utils/logger.js",
+        "shared/utils/text.js",
+        "shared/utils/storage.js",
+        "shared/utils/account.js",
+        "shared/utils/url.js",
+        "shared/utils/city-tags.js",
+        "shared/utils/intervals.js",
+        "shared/utils/runtime-controls.js",
+        "shared/utils/state-store.js",
+        "shared/utils/messaging.js",
+        "content/utils/auth-probe.js",
+        "content/utils/page-refresh.js",
+        "vendor/sweetalert.js",
+        "content/utils/dom.js",
+        "content/utils/application-observability.js",
+        "content/utils/identity.js",
+        "content/utils/toasts.js",
+        "content/utils/alerts.js",
+        "content/utils/job-search.js",
+        "content/utils/job-match.js",
+        "content/utils/polling.js",
+        "content/utils/schedule-automation.js",
+        "content/login.js",
+        "content/fetch.js"
+      ],
+      "matches": [
+        "https://hiring.amazon.ca/*",
+        "https://hiring.amazon.com/*",
+        "*://auth.hiring.amazon.com/*",
+        "*://auth.hiring.amazon.ca/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "description": "Fastrack amazon jobs \u2014 automatically books Amazon warehouse shifts as soon as a matching slot opens.",
+  "externally_connectable": {
+    "matches": [
+      "https://hiring.amazon.ca/*",
+      "https://hiring.amazon.com/*",
+      "*://auth.hiring.amazon.com/*",
+      "*://auth.hiring.amazon.ca/*"
+    ]
+  },
+  "host_permissions": [
+    "https://hiring.amazon.ca/*",
+    "https://hiring.amazon.com/*",
+    "*://auth.hiring.amazon.com/*",
+    "*://auth.hiring.amazon.ca/*"
+  ],
+  "icons": {
+    "128": "assets/images/amazon.png",
+    "16": "assets/images/amazon.png",
+    "48": "assets/images/amazon.png"
+  },
+  "incognito": "spanning",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsULBghh9xeg81ClpMIN0G6pe2fKESk6s3WBuZbK7dT6P4QwIqCNBw9rhyuqR+xvL9pHayqNI9fvvA+ostvjGelvMzak2y91azT8sF2uwQpVxTSeKy+NzKK8fiifx8nDZEdzGNS7lQt7zsCEj3IN4FsWZridnbAXkWC5a4Gu47PtCJVkCVZVDQLxUANSYxTnT1IpukJuBBGHmQfsu4K4IAsJ/gUvB8cgoiZa8tpORUpFjR/i1cbHk2VSCjV8qB01WnIGvVXbsK7XJrgqwoCMIkFqJ8AZUz00GUAM4xZSlyV7sApmLdQz4quvi/57ljcNvfohdWn7aGLYtuD78qFqjPQIDAQAB",
+  "manifest_version": 3,
+  "name": "Fastrack amazon jobs",
+  "permissions": [
+    "tabs",
+    "storage",
+    "activeTab",
+    "declarativeContent",
+    "scripting"
+  ],
+  "update_url": "https://clients2.google.com/service/update2/crx",
+  "version": "2.10.0",
+  "web_accessible_resources": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "resources": [
+        "assets/images/amazon.png",
+        "assets/sounds/alert.wav",
+        "assets/sounds/alert_long.wav",
+        "shared/constants.js",
+        "shared/utils/logger.js",
+        "shared/utils/messaging.js",
+        "shared/utils/text.js",
+        "shared/utils/storage.js",
+        "shared/utils/account.js",
+        "shared/utils/url.js",
+        "shared/utils/city-tags.js",
+        "shared/utils/intervals.js",
+        "shared/utils/runtime-controls.js",
+        "shared/utils/state-store.js",
+        "content/utils/dom.js"
+      ]
+    },
+    {
+      "resources": [
+        "content/utils/direct-waf-bridge-page.js"
+      ],
+      "matches": [
+        "https://hiring.amazon.ca/*",
+        "https://hiring.amazon.com/*"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Amazon Shifts Logs"
+  short_description: "Resource-checked log and HAR analysis"
+  default_prompt: "Use $analyze-amazon-shifts-logs to analyse the latest Amazon Shifts logs, compare them against the official resources bundle, and explain any booking-flow bugs."
