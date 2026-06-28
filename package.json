@@ -1,9 +1,10 @@
 {
-  "name": "amazon-shifts-tests",
+  "name": "amazon-warehouse-ca",
   "version": "1.0.0",
   "private": true,
-  "description": "Test harness for the Fastrack amazon jobs Chrome extension shared modules.",
+  "description": "Test harness for the amazon-warehouse-ca Chrome extension shared modules.",
   "scripts": {
+    "check:backend-url": "node scripts/assert-production-backend.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

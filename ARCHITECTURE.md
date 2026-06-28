@@ -6,10 +6,10 @@
 
 - Storage key names
 - Message action names
-- Local popup/search defaults
+- Backend endpoint paths and fallback defaults
 - Amazon routes, country configuration, and GraphQL query metadata
 - DOM selectors
-- Polling, login, Create Application, schedule, and alert timing values
+- Polling, login, Create Application, schedule, alert, and Telegram timing values
 - Install and reset defaults
 
 Runtime files should consume constants instead of embedding selectors, URLs, or timing values.
@@ -28,6 +28,7 @@ Runtime files should consume constants instead of embedding selectors, URLs, or 
 
 - `background/service-worker.js` only wires Chrome events.
 - `background/tab-service.js` syncs extension state to tabs and injects the Create Application controller.
+- `background/telegram-service.js` formats, deduplicates, and relays Telegram messages.
 
 ## Content responsibility
 
@@ -53,7 +54,6 @@ The refactor removed:
 - Obsolete commented login and interval code
 - Unused helper and placeholder functions
 - Popup messages with no receiver
-- External runtime validation, remote user fetching, remote observability delivery, and notification relay paths
 
 
 ## Auth backoff flow
@@ -65,4 +65,4 @@ Backoff changes only the effective polling delay. It does not overwrite the inte
 
 ## Distribution build boundary
 
-`scripts/build.js` copies `src/` to `dist/amazon-shifts/`, obfuscates non-vendor JavaScript, and optionally packages a ZIP. The build creates a unique per-file obfuscator identifier prefix from the relative file path plus a hash. This avoids generated helper-function collisions between classic scripts loaded into the same service-worker, popup, or content-script global scope.
+`scripts/build.js` copies `src/` to `dist/amazon-warehouse-ca/`, obfuscates non-vendor JavaScript, and optionally packages a ZIP. The build creates a unique per-file obfuscator identifier prefix from the relative file path plus a hash. This avoids generated helper-function collisions between classic scripts loaded into the same service-worker, popup, or content-script global scope.

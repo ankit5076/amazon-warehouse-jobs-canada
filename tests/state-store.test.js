@@ -344,7 +344,7 @@ describe("AMZ_STATE", () => {
         await expect(globalThis.AMZ_STATE.getPageRefreshIntervalMs()).resolves.toBe(120000);
     });
 
-    it("activates automation without a selected remote client", async () => {
+    it("allows paid activation without a selected admin client", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const store = useLocalStore();
 

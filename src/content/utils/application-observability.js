@@ -1,10 +1,10 @@
-/* Compact application-attempt observability traces for Amazon Shifts booking races. */
+/* Compact application-attempt observability traces for amazon-warehouse-ca booking races. */
 (function (root) {
   'use strict';
 
   if (root.AMZ_APPLICATION_OBSERVABILITY) return;
 
-  const { AMAZON, DIRECT_APPLICATION, STORAGE_KEYS } = root.AMZ_CONSTANTS;
+  const { AMAZON, BACKEND, DIRECT_APPLICATION, STORAGE_KEYS } = root.AMZ_CONSTANTS;
   const storage = root.AMZ_STORAGE;
   const log = root.AMZ_LOGGER?.create?.('[application-observability]', {
     workflow: 'application-observability',
@@ -44,12 +44,24 @@
     60 * 1000,
     Number(DIRECT_APPLICATION.APPLICATION_OBSERVABILITY_PENDING_TTL_MS) || 10 * 60 * 1000
   );
+  const TRACKER_POST_RETRY_DELAY_MS = 1500;
+  const TRACKER_POST_MAX_ATTEMPTS = 3;
+  const scheduledTrackerRetryKeys = new Set();
   let activeTrace = null;
 
   function safePerformanceNow() {
     return typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
       : Date.now();
+  }
+
+  function istIso(epochMs = Date.now()) {
+    return root.AMZ_TIME?.formatIstIso?.(epochMs) || new Date(epochMs).toISOString();
+  }
+
+  function istCompact(epochMs = Date.now()) {
+    return root.AMZ_TIME?.formatIstCompact?.(epochMs) ||
+      new Date(epochMs).toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   }
 
   function normalizeText(value, limit = MAX_SAMPLE_LENGTH) {
@@ -96,7 +108,7 @@
   }
 
   function createAttemptId(jobId) {
-    const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    const stamp = istCompact();
     const token = normalizeText(jobId, 18)?.replace(/[^A-Za-z0-9]/g, '').slice(-12) || 'job';
     const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
     return `AS-${stamp}-${token}-${rand}`;
@@ -140,7 +152,7 @@
     ) {
       return 'verification';
     }
-    if (normalized.includes('observability')) return 'local_observability';
+    if (normalized.includes('observability') || normalized.includes('tracker')) return 'tracker_observability';
     if (normalized.includes('job_search')) return 'job_search';
     return 'extension_js';
   }
@@ -183,7 +195,7 @@
     if (phaseKey) recordMark(trace, phaseKey, perfMs, epochMs);
     const event = {
       name,
-      at: new Date(epochMs).toISOString(),
+      at: istIso(epochMs),
       epoch_ms: epochMs,
       elapsed_ms: typeof trace.startEpochMs === 'number'
         ? Math.max(0, Math.round(epochMs - trace.startEpochMs))
@@ -238,7 +250,7 @@
     const job = summarizeJob(matchedJob || {});
     const trace = {
       attemptId: createAttemptId(job.jobId),
-      startedAt: new Date(searchStartEpochMs).toISOString(),
+      startedAt: istIso(searchStartEpochMs),
       startEpochMs: searchStartEpochMs,
       startMs: searchStartPerfMs,
       expiresAt: searchEndEpochMs + PENDING_TTL_MS,
@@ -396,7 +408,7 @@
     const countryConfig = countryConfigForContext(context);
     const trace = {
       attemptId: createAttemptId(context.jobId),
-      startedAt: new Date(startedAt).toISOString(),
+      startedAt: istIso(startedAt),
       startEpochMs: startedAt,
       startMs: safePerformanceNow(),
       expiresAt: startedAt + PENDING_TTL_MS,
@@ -641,7 +653,7 @@
     const record = {
       trace,
       expiresAt: trace.expiresAt,
-      updatedAt: new Date().toISOString(),
+      updatedAt: istIso(),
     };
     try {
       if (storage.setSession) {
@@ -724,13 +736,17 @@
       }, 'applicationFormOpenedAt');
     }
     Object.assign(trace, storageContext);
-    finalizeApplicationTrace(trace, 'APPLICATION_CREATED', {
+    const outcome = details.terminal === true
+      ? (details.outcome || 'BOOKED')
+      : 'APPLICATION_CREATED';
+    finalizeApplicationTrace(trace, outcome, {
       detailedOutcome: 'APPLICATION_FORM_OPENED',
       applicationId: normalizeText(context.applicationId, 120) || trace.applicationId || null,
+      confirmedScheduleId: normalizeText(context.scheduleId, 80) || trace.confirmedScheduleId || null,
     });
-    return persistApplicationAttemptLocally(trace, context, {
+    return persistApplicationAttemptToTracker(trace, context, {
       force: true,
-      clearPending: false,
+      clearPending: details.terminal === true,
     });
   }
 
@@ -757,7 +773,34 @@
     return Array.isArray(trace?.postedOutcomes) && trace.postedOutcomes.includes(outcome);
   }
 
-  function localPayload(trace) {
+  function trackerRetryKey(trace, outcome) {
+    return [trace?.attemptId || 'attempt', outcome || trace?.outcome || 'outcome'].join('::');
+  }
+
+  function clonePlain(value) {
+    try {
+      return JSON.parse(JSON.stringify(value || {}));
+    } catch (_) {
+      return value || {};
+    }
+  }
+
+  function scheduleTrackerRetry(trace, context, options, outcome) {
+    if (!trace || Number(trace.observabilityPostCount || 0) >= TRACKER_POST_MAX_ATTEMPTS) return;
+    const key = trackerRetryKey(trace, outcome);
+    if (scheduledTrackerRetryKeys.has(key)) return;
+    scheduledTrackerRetryKeys.add(key);
+    setTimeout(() => {
+      scheduledTrackerRetryKeys.delete(key);
+      void persistApplicationAttemptToTracker(trace, clonePlain(context), {
+        ...options,
+        force: true,
+        retry: true,
+      }).catch(() => null);
+    }, TRACKER_POST_RETRY_DELAY_MS);
+  }
+
+  function trackerPayload(trace) {
     refreshDurations(trace);
     return {
       attempt_id: trace.attemptId,
@@ -842,7 +885,7 @@
     };
   }
 
-  async function persistApplicationAttemptLocally(trace, context = {}, options = {}) {
+  async function persistApplicationAttemptToTracker(trace, context = {}, options = {}) {
     if (!trace || !PROGRESS_OUTCOMES.has(trace.outcome) && !TERMINAL_OUTCOMES.has(trace.outcome)) {
       return { ok: false, skipped: 'invalid-trace' };
     }
@@ -853,6 +896,7 @@
     }
 
     const started = Date.now();
+    let delivered = false;
     try {
       const snapshot = JSON.parse(JSON.stringify(trace));
       if (!isTerminalAtStart) {
@@ -869,28 +913,50 @@
       trace.extensionVersion = trace.extensionVersion || extensionVersion();
       trace.observabilityPostCount = (trace.observabilityPostCount || 0) + 1;
       snapshot.observabilityPostCount = trace.observabilityPostCount;
-      const payload = localPayload(snapshot);
+      const payload = trackerPayload(snapshot);
+      let result;
+      if (root.AMZ_API?.apiPostApplicationAttempt) {
+        result = await root.AMZ_API.apiPostApplicationAttempt(payload);
+      } else if (root.AMZ_API?.backendRequest) {
+        result = await root.AMZ_API.backendRequest(BACKEND.ENDPOINTS.APPLICATION_ATTEMPTS, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        result = { ok: false, error: 'backend API unavailable' };
+      }
       trace.observabilityLastPostMs = Math.max(0, Date.now() - started);
       trace.observabilityOverheadMs = (trace.observabilityOverheadMs || 0) + trace.observabilityLastPostMs;
-      trace.postedOutcomes = Array.from(new Set([...(trace.postedOutcomes || []), outcomeAtStart]));
-      log.debug('application observability stored locally', {
-        outcome: trace.outcome,
-        attemptId: trace.attemptId || null,
-        isTerminal: snapshot.isTerminal === true,
-      });
-      return { ok: true, localOnly: true, payload };
+      if (!result?.ok) {
+        trace.observabilityPostErrorCount = (trace.observabilityPostErrorCount || 0) + 1;
+        log.debug('application observability tracker POST failed', {
+          outcome: trace.outcome,
+          status: result?.status || null,
+          error: result?.error || null,
+        });
+      } else {
+        trace.postedOutcomes = Array.from(new Set([...(trace.postedOutcomes || []), outcomeAtStart]));
+        delivered = true;
+      }
+      return result || { ok: false, error: 'empty tracker response' };
     } catch (error) {
       trace.observabilityLastPostMs = Math.max(0, Date.now() - started);
       trace.observabilityOverheadMs = (trace.observabilityOverheadMs || 0) + trace.observabilityLastPostMs;
       trace.observabilityPostErrorCount = (trace.observabilityPostErrorCount || 0) + 1;
-      log.debug('application observability local persistence threw', {
+      log.debug('application observability tracker POST threw', {
         outcome: trace.outcome,
         error: error?.message || String(error),
       });
       return { ok: false, error: error?.message || String(error) };
     } finally {
       if (isTerminalAtStart || options.clearPending === true) {
-        await clearPendingTrace();
+        if (delivered) {
+          await clearPendingTrace();
+        } else {
+          await persistPendingTrace(trace);
+          scheduleTrackerRetry(trace, context, options, outcomeAtStart);
+        }
       } else if (!isTerminalOutcome(trace.outcome)) {
         await persistPendingTrace(trace);
       }
@@ -905,14 +971,14 @@
     });
     trace.isTerminal = false;
     trace.observabilityStage = 'PROGRESS';
-    void persistApplicationAttemptLocally(trace, context).catch(() => null);
+    void persistApplicationAttemptToTracker(trace, context).catch(() => null);
     return trace;
   }
 
   function finalizeAndFlush(trace, outcome, extras = {}, context = {}) {
     if (!trace) return null;
     finalizeApplicationTrace(trace, outcome, extras);
-    void persistApplicationAttemptLocally(trace, context, { force: true }).catch(() => null);
+    void persistApplicationAttemptToTracker(trace, context, { force: true }).catch(() => null);
     return trace;
   }
 
@@ -1187,7 +1253,7 @@
   function recordExtensionDeactivated(context = {}, details = {}) {
     void loadPendingTrace(context).then(trace => {
       if (!trace || trace.extensionDeactivatedAt) return null;
-      trace.extensionDeactivatedAt = new Date().toISOString();
+      trace.extensionDeactivatedAt = istIso();
       recordApplicationEvent(trace, 'extension_deactivated', details, 'extensionDeactivatedAt');
       return persistPendingTrace(trace);
     }).catch(() => null);
@@ -1196,7 +1262,7 @@
   function finalizePendingDeactivated(context = {}, details = {}) {
     void loadPendingTrace(context).then(trace => {
       if (!trace) return null;
-      trace.extensionDeactivatedAt = trace.extensionDeactivatedAt || new Date().toISOString();
+      trace.extensionDeactivatedAt = trace.extensionDeactivatedAt || istIso();
       recordApplicationEvent(trace, 'extension_deactivated', details, 'extensionDeactivatedAt');
       return finalizeAndFlush(trace, 'DEACTIVATED', {
         detailedOutcome: 'EXTENSION_DEACTIVATED_DURING_ATTEMPT',
@@ -1209,7 +1275,7 @@
     recordApplicationEvent,
     recordApplicationEventAt,
     finalizeApplicationTrace,
-    persistApplicationAttemptLocally,
+    persistApplicationAttemptToTracker,
     persistPendingTrace,
     loadPendingTrace,
     clearPendingTrace,

@@ -5,7 +5,7 @@
 - Fixed dist-only runtime failures caused by obfuscator helper-prefix collisions between files such as `content/utils/polling.js` and `content/utils/schedule-automation.js`.
 - Replaced the truncated path prefix with a path-derived hash-backed identifier prefix.
 - Added an explicit build-time collision guard for obfuscator prefixes.
-- Regenerated `dist/amazon-shifts/` with the corrected build path.
+- Regenerated `dist/amazon-warehouse-ca/` with the corrected build path.
 - Updated stale unit tests and Chrome storage stubs to match the refactored constants/storage surface.
 
 ## Auth backoff build

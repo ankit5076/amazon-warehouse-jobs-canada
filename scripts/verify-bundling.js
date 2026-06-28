@@ -5,7 +5,7 @@ const { spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 const SRC = path.join(ROOT, "src");
-const DIST = path.join(ROOT, "dist", "amazon-shifts");
+const DIST = path.join(ROOT, "dist", "amazon-warehouse-ca");
 const HASHED_WAF_BRIDGE_RE = /^direct-waf-bridge-page\.[a-f0-9]{12}\.js$/;
 const SOURCE_JS_RE = /^(shared|content|background|popup)\//;
 

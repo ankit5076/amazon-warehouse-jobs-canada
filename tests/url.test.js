@@ -15,12 +15,6 @@ describe("AMZ_URL", () => {
     });
 
     it("recognizes app hash routes when Amazon inserts query params before the hash", () => {
-        expect(globalThis.AMZ_URL.isMyApplicationsPage(
-            "https://hiring.amazon.ca/app?country=ca&locale=en-CA#/myApplications"
-        )).toBe(true);
-        expect(globalThis.AMZ_URL.isMyApplicationsPage(
-            "https://hiring.amazon.com/app?country=us&locale=en-US#/myApplications"
-        )).toBe(true);
         expect(globalThis.AMZ_URL.isJobSearchPage(
             "https://hiring.amazon.ca/app?country=ca&locale=en-CA#/jobSearch"
         )).toBe(true);
@@ -70,6 +64,18 @@ describe("AMZ_URL", () => {
         )).toBe(true);
         expect(globalThis.AMZ_URL.isApplicationFormPage(
             "https://hiring.amazon.com/application/?jobId=JOB-1&page=pre-consent&scheduleId=SCH-1&country=us"
+        )).toBe(false);
+        expect(globalThis.AMZ_URL.isApplicationFormPage(
+            "https://hiring.amazon.com/application/?jobId=JOB-1&scheduleId=SCH-1&country=us#/consent?applicationId=app-1&scheduleId=SCH-1"
+        )).toBe(true);
+        expect(globalThis.AMZ_URL.isApplicationFormPage(
+            "https://hiring.amazon.ca/application/ca/?applicationId=app-1&jobId=JOB-1"
+        )).toBe(false);
+        expect(globalThis.AMZ_URL.isFinalApplicationFormPage(
+            "https://hiring.amazon.ca/application/ca/?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1#/general-questions?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1"
+        )).toBe(true);
+        expect(globalThis.AMZ_URL.isFinalApplicationFormPage(
+            "https://hiring.amazon.com/application/?jobId=JOB-1&scheduleId=SCH-1&country=us#/consent?applicationId=app-1&scheduleId=SCH-1"
         )).toBe(false);
         expect(globalThis.AMZ_URL.getApplicationRouteName(
             "https://hiring.amazon.com/application/us/?jobId=JOB-1#/general-questions?applicationId=app-1"

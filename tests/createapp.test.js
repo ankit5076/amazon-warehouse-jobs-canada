@@ -3,7 +3,7 @@ import { JSDOM } from "jsdom";
 import { loadSharedScripts, unloadSharedNamespaces } from "./_load.js";
 
 function tick() {
-    return new Promise(resolve => setTimeout(resolve, 0));
+    return Promise.resolve();
 }
 
 function createTestLogger() {
@@ -32,8 +32,12 @@ function setupCreateAppHarness(guard, options = {}) {
         });
     }
 
+    const buttonLabels = options.buttons || ["Create Application"];
+    const body = options.body || buttonLabels
+        .map(label => `<button>${label}</button>`)
+        .join("");
     const dom = new JSDOM(
-        '<!doctype html><html><body><button>Create Application</button></body></html>',
+        `<!doctype html><html><body>${body}</body></html>`,
         {
             url: options.url || "https://hiring.amazon.ca/application/ca/?country=ca&jobId=JOB-1&scheduleId=SCH-1",
         }
@@ -45,27 +49,39 @@ function setupCreateAppHarness(guard, options = {}) {
     globalThis.chrome.runtime.onMessage = { addListener: vi.fn() };
 
     const { DIRECT_APPLICATION, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+    const storageValues = {
+        [STORAGE_KEYS.ACTIVE]: true,
+    };
+    if (typeof options.storedUseDirectApplication === "boolean") {
+        storageValues[STORAGE_KEYS.USE_DIRECT_APPLICATION] = options.storedUseDirectApplication;
+    }
     const guardKey = [
         DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
         "JOB-1",
         "SCH-1",
     ].join("::");
 
-    dom.window.sessionStorage.setItem(guardKey, JSON.stringify(guard));
+    if (guard !== null && guard !== undefined) {
+        dom.window.sessionStorage.setItem(guardKey, JSON.stringify(guard));
+    }
 
     const clickElement = vi.fn(() => true);
     globalThis.AMZ_DOM = {
         isClickable: () => true,
         describeButton: button => button && { text: button.textContent },
         clickElement,
-        findButtonByText: text =>
-            [...dom.window.document.querySelectorAll("button")].find(
-                button => button.textContent.trim() === text
-            ) || null,
+        findButtonByText: text => {
+            const target = String(text || "").trim().toLowerCase();
+            return [...dom.window.document.querySelectorAll("button")].find(button => {
+                const candidate = button.textContent.trim().toLowerCase();
+                return candidate === target || candidate.includes(target);
+            }) || null;
+        },
     };
     globalThis.AMZ_LOGGER = { create: createTestLogger };
     globalThis.AMZ_URL = {
         isApplicationFormPage: () => options.applicationFormPage === true,
+        isFinalApplicationFormPage: () => options.finalApplicationFormPage === true,
         getJobIdFromUrl: () => "JOB-1",
         getApplicationContextFromUrl: () => ({
             applicationId: options.applicationId || null,
@@ -75,19 +91,23 @@ function setupCreateAppHarness(guard, options = {}) {
     };
     globalThis.AMZ_STORAGE = {
         getLocal: vi.fn(async keys => {
-            const values = {
-                [STORAGE_KEYS.ACTIVE]: true,
-            };
-            if (typeof options.storedUseDirectApplication === "boolean") {
-                values[STORAGE_KEYS.USE_DIRECT_APPLICATION] = options.storedUseDirectApplication;
-            }
             if (Array.isArray(keys)) {
                 return keys.reduce((result, key) => {
-                    if (Object.prototype.hasOwnProperty.call(values, key)) result[key] = values[key];
+                    if (Object.prototype.hasOwnProperty.call(storageValues, key)) {
+                        result[key] = storageValues[key];
+                    }
                     return result;
                 }, {});
             }
-            return Object.prototype.hasOwnProperty.call(values, keys) ? { [keys]: values[keys] } : {};
+            return Object.prototype.hasOwnProperty.call(storageValues, keys)
+                ? { [keys]: storageValues[keys] }
+                : {};
+        }),
+        setLocal: vi.fn(async values => {
+            Object.assign(storageValues, values);
+        }),
+        removeLocal: vi.fn(async keys => {
+            for (const key of Array.isArray(keys) ? keys : [keys]) delete storageValues[key];
         }),
     };
     globalThis.AMZ_NOTIFICATIONS = {
@@ -97,7 +117,7 @@ function setupCreateAppHarness(guard, options = {}) {
     const button = dom.window.document.querySelector("button");
     const nativeClick = vi.spyOn(button, "click");
 
-    return { clickElement, button, nativeClick };
+    return { clickElement, nativeClick, storageValues };
 }
 
 function loadCreateAppScripts() {
@@ -115,6 +135,8 @@ describe("Create Application automation", () => {
     });
 
     afterEach(() => {
+        globalThis.__amazonCreateAppAutomation?.cleanup?.();
+        globalThis.window?.close?.();
         delete globalThis.window;
         delete globalThis.document;
         delete globalThis.MutationObserver;
@@ -208,6 +230,20 @@ describe("Create Application automation", () => {
         expect(clickElement).toHaveBeenCalledOnce();
     });
 
+    it("clicks Start application as a native create button in manual mode", async () => {
+        const { clickElement } = setupCreateAppHarness(null, {
+            useDirectApplication: false,
+            buttons: ["Start application"],
+        });
+
+        loadCreateAppScripts();
+        await tick();
+        await tick();
+
+        expect(clickElement).toHaveBeenCalledOnce();
+        expect(clickElement.mock.calls[0][1]).toBe("create application");
+    });
+
     it("uses the stored manual mode without requiring a page refresh", async () => {
         const { clickElement } = setupCreateAppHarness({
             stage: "application-created-waiting-for-confirm",
@@ -225,11 +261,11 @@ describe("Create Application automation", () => {
         expect(clickElement).toHaveBeenCalledOnce();
     });
 
-    it("does not schedule an automatic redirect after native UI click when direct application is disabled", async () => {
+    it("does not schedule an automatic My Applications redirect after native UI click", async () => {
         vi.useFakeTimers();
         try {
             setupCreateAppHarness(null, {
-                useDirectApplication: false,
+                useDirectApplication: true,
             });
             const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
@@ -239,26 +275,6 @@ describe("Create Application automation", () => {
 
             expect(globalThis.AMZ_DOM.clickElement).toHaveBeenCalledOnce();
             expect(timeoutSpy.mock.calls.some(call => String(call[0]).includes("window.location"))).toBe(false);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it("schedules a My Applications redirect after UI click only when direct application is enabled", async () => {
-        vi.useFakeTimers();
-        try {
-            setupCreateAppHarness(null, {
-                useDirectApplication: true,
-            });
-            const redirectDelayMs = globalThis.AMZ_CONSTANTS.CREATE_APPLICATION.REDIRECT_DELAY_MS;
-            const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-            loadCreateAppScripts();
-            await Promise.resolve();
-            await Promise.resolve();
-
-            expect(globalThis.AMZ_DOM.clickElement).toHaveBeenCalledOnce();
-            expect(timeoutSpy.mock.calls.filter(call => call[1] === redirectDelayMs)).toHaveLength(1);
         } finally {
             vi.useRealTimers();
         }
@@ -284,5 +300,86 @@ describe("Create Application automation", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("uses the fast manual post-action rescan instead of the legacy two second fallback", async () => {
+        vi.useFakeTimers();
+        try {
+            setupCreateAppHarness(null, {
+                useDirectApplication: false,
+            });
+            const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+            const { POST_ACTION_RESCAN_MS, POST_NEXT_RESCAN_MS } = globalThis.AMZ_CONSTANTS.CREATE_APPLICATION;
+
+            loadCreateAppScripts();
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(globalThis.AMZ_DOM.clickElement).toHaveBeenCalledOnce();
+            expect(timeoutSpy.mock.calls.some(call => call[1] === POST_ACTION_RESCAN_MS)).toBe(true);
+            expect(timeoutSpy.mock.calls.some(call => call[1] === POST_NEXT_RESCAN_MS)).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("continues manual automation from Create Application to Select this job", async () => {
+        vi.useFakeTimers();
+        try {
+            const { clickElement } = setupCreateAppHarness(null, {
+                useDirectApplication: false,
+                buttons: ["Create Application"],
+            });
+
+            loadCreateAppScripts();
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(clickElement).toHaveBeenCalledTimes(1);
+            expect(clickElement.mock.calls[0][1]).toBe("create application");
+
+            globalThis.window.history.pushState(
+                {},
+                "",
+                "https://hiring.amazon.ca/application/ca/?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1#/job-opportunities?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1"
+            );
+            globalThis.document.body.innerHTML = "<button>Select this job</button>";
+            vi.advanceTimersByTime(globalThis.AMZ_CONSTANTS.CREATE_APPLICATION.POST_ACTION_RESCAN_MS);
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(clickElement).toHaveBeenCalledTimes(2);
+            expect(clickElement.mock.calls[1][1]).toBe("select this job");
+
+            globalThis.window.history.pushState(
+                {},
+                "",
+                "https://hiring.amazon.ca/application/ca/?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1#/job-opportunities/job-confirmation?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1"
+            );
+            globalThis.document.body.innerHTML = "<button>Select this job</button>";
+            vi.advanceTimersByTime(globalThis.AMZ_CONSTANTS.CREATE_APPLICATION.POST_ACTION_RESCAN_MS);
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(clickElement).toHaveBeenCalledTimes(3);
+            expect(clickElement.mock.calls[2][1]).toBe("select this job");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("stops manual UI automation once the final application form opens", async () => {
+        const { clickElement } = setupCreateAppHarness(null, {
+            useDirectApplication: false,
+            finalApplicationFormPage: true,
+            buttons: ["Next"],
+            url: "https://hiring.amazon.ca/application/ca/?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1#/general-questions?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1",
+        });
+
+        loadCreateAppScripts();
+        await tick();
+        await tick();
+
+        expect(clickElement).not.toHaveBeenCalled();
     });
 });

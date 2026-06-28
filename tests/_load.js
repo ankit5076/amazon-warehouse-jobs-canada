@@ -3,7 +3,7 @@
  * public API on `globalThis` via an IIFE) and make those globals
  * available to the test environment.
  *
- * The amazon-shifts shared/* modules are plain MV3 scripts (no ES
+ * The amazon-warehouse-ca shared/* modules are plain MV3 scripts (no ES
  * modules). Each file wraps its body in `(function (root) { ... })(globalThis)`
  * and assigns its public surface to a single `root.AMZ_*` namespace,
  * so we just read the file and run it via indirect eval at the global
@@ -87,7 +87,7 @@ function installChromeStub() {
  * Load one or more shared source files into the current global scope.
  * Files are paths relative to `src/`.
  *
- * @param {string[]} relativePaths - e.g. ["shared/constants.js", "shared/utils/storage.js"]
+ * @param {string[]} relativePaths - e.g. ["shared/constants.js", "shared/validation.js"]
  */
 export function loadSharedScripts(relativePaths) {
     installChromeStub();
@@ -103,8 +103,9 @@ export function loadSharedScripts(relativePaths) {
 
 /**
  * Reset a previously-loaded shared module so it can be re-evaluated
- * (useful for modules with captured module-level state when a test needs a
- * fresh evaluation).
+ * (useful for validation.js where module-level state — kill switch,
+ * expiry — is captured at load time and we want to reload after
+ * mutating Date.now()).
  */
 export function unloadSharedNamespaces(names) {
     for (const name of names) {

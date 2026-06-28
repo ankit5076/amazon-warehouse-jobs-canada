@@ -13,18 +13,103 @@
     workflow: 'schedule-automation',
     source: 'content/utils/schedule-automation.js',
   });
+  const APPLY_CLICK_SESSION_GUARD_KEY = '__amz_schedule_apply_click_guard_v1';
 
   function create({ isActive, onNoApplyPath } = {}) {
     let cleanupCurrent = null;
+    let applyClickGuard = null;
 
     function active() {
       return typeof isActive === 'function' && isActive() === true;
     }
 
+    function applyClickGuardKey() {
+      return [
+        urls.getJobIdFromUrl() || '',
+        urls.currentUrl() || '',
+      ].join('::');
+    }
+
+    function getSessionStorage() {
+      try {
+        return root.window?.sessionStorage || root.sessionStorage || null;
+      } catch {
+        return null;
+      }
+    }
+
+    function clearStoredApplyClickGuard() {
+      try {
+        getSessionStorage()?.removeItem?.(APPLY_CLICK_SESSION_GUARD_KEY);
+      } catch {
+        // Session storage is best-effort only.
+      }
+    }
+
+    function readStoredApplyClickGuard() {
+      try {
+        const raw = getSessionStorage()?.getItem?.(APPLY_CLICK_SESSION_GUARD_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeStoredApplyClickGuard(guard) {
+      try {
+        getSessionStorage()?.setItem?.(APPLY_CLICK_SESSION_GUARD_KEY, JSON.stringify(guard));
+      } catch {
+        // Session storage is best-effort only.
+      }
+    }
+
+    function applyClickInFlight(source) {
+      const guard = applyClickGuard || readStoredApplyClickGuard();
+      if (!guard) return false;
+
+      const now = Date.now();
+      if (now > guard.expiresAt) {
+        applyClickGuard = null;
+        clearStoredApplyClickGuard();
+        return false;
+      }
+
+      if (guard.key !== applyClickGuardKey()) return false;
+      applyClickGuard = guard;
+
+      if (!guard.reported) {
+        guard.reported = true;
+        writeStoredApplyClickGuard(guard);
+        log.info('apply click skipped because Amazon application navigation is already in flight', {
+          source,
+          originalSource: guard.source,
+          jobId: urls.getJobIdFromUrl(),
+          clickedAt: guard.clickedAtIso,
+          expiresAt: guard.expiresAtIso,
+        });
+      }
+      return true;
+    }
+
+    function rememberApplyClick(source, clicked) {
+      if (!clicked) return;
+      const now = Date.now();
+      const expiresAt = now + SCHEDULE_AUTOMATION.APPLY_CLICK_GUARD_TTL_MS;
+      applyClickGuard = {
+        key: applyClickGuardKey(),
+        source,
+        clickedAtIso: new Date(now).toISOString(),
+        expiresAt,
+        expiresAtIso: new Date(expiresAt).toISOString(),
+        reported: false,
+      };
+      writeStoredApplyClickGuard(applyClickGuard);
+    }
+
     function getScheduleCardDetails(button) {
       const scheduleCard = button?.closest(SELECTORS.SCHEDULE_CARD_ROOT);
       return {
-        selectedAt: new Date().toISOString(),
+        selectedAt: root.AMZ_TIME?.nowIstIso?.() || new Date().toISOString(),
         pageUrl: urls.currentUrl(),
         jobId: urls.getJobIdFromUrl(),
         buttonText: text.normalizeWhitespace(button?.textContent || '') || null,
@@ -175,11 +260,16 @@
           throttleMs: root.AMZ_CONSTANTS.LOGGING.HIGH_FREQUENCY_THROTTLE_MS,
         });
         if (!button) return;
+        if (applyClickInFlight('observer')) {
+          currentObserver.disconnect();
+          return;
+        }
         root.AMZ_APPLICATION_OBSERVABILITY?.recordScheduleClick?.(
           getScheduleCardDetails(button),
           'observer'
         );
         const clicked = dom.clickElement(button, 'clickApplyButton');
+        rememberApplyClick('observer', clicked);
         log.info('apply button clicked', {
           clicked,
           ...getScheduleClickSummary(button, 'observer'),
@@ -195,11 +285,16 @@
         selected: !!button,
       });
       if (button) {
+        if (applyClickInFlight('initial')) {
+          observer.disconnect();
+          return;
+        }
         root.AMZ_APPLICATION_OBSERVABILITY?.recordScheduleClick?.(
           getScheduleCardDetails(button),
           'initial'
         );
         const clicked = dom.clickElement(button, 'clickApplyButton existing');
+        rememberApplyClick('initial', clicked);
         log.info('apply button clicked', {
           clicked,
           ...getScheduleClickSummary(button, 'initial'),
@@ -391,6 +486,11 @@
           throttleMs: root.AMZ_CONSTANTS.LOGGING.HIGH_FREQUENCY_THROTTLE_MS,
         });
         if (scheduleApplyButton) {
+          if (applyClickInFlight('schedule-apply')) {
+            finished = true;
+            cleanup();
+            return;
+          }
           clearPostSelectOptionsTimer();
           clearPostLabelApplyTimer();
           const button = scheduleApplyButton;
@@ -398,6 +498,7 @@
           storage.setLocal({ [STORAGE_KEYS.LAST_SELECTED_SCHEDULE]: scheduleDetails });
           root.AMZ_APPLICATION_OBSERVABILITY?.recordScheduleClick?.(scheduleDetails, 'schedule-apply');
           finished = dom.clickElement(button, 'schedule apply');
+          rememberApplyClick('schedule-apply', finished);
           log.info('schedule apply clicked', {
             clicked: finished,
             ...getScheduleClickSummary(button, 'schedule-apply'),
@@ -473,6 +574,11 @@
           throttleMs: root.AMZ_CONSTANTS.LOGGING.HIGH_FREQUENCY_THROTTLE_MS,
         });
         if (desktopApplyButton) {
+          if (applyClickInFlight('desktop-apply')) {
+            finished = true;
+            cleanup();
+            return;
+          }
           clearPostSelectOptionsTimer();
           clearPostLabelApplyTimer();
           const button = desktopApplyButton;
@@ -480,6 +586,7 @@
           storage.setLocal({ [STORAGE_KEYS.LAST_SELECTED_SCHEDULE]: scheduleDetails });
           root.AMZ_APPLICATION_OBSERVABILITY?.recordScheduleClick?.(scheduleDetails, 'desktop-apply');
           finished = dom.clickElement(button, 'desktop apply');
+          rememberApplyClick('desktop-apply', finished);
           log.info('desktop apply clicked', {
             clicked: finished,
             ...getScheduleClickSummary(button, 'desktop-apply'),

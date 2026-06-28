@@ -130,14 +130,32 @@
 
   function showJobFoundToast(city) {
     Swal.fire({
-      title: 'Job Found!',
-      text: 'Matching job found in ' + city,
+      title: 'Job Matched!',
+      text: 'Matching job in ' + city,
       icon: 'success',
       timer: ALERTS.JOB_FOUND_TOAST_DURATION_MS,
       timerProgressBar: true,
       toast: true,
       position: 'top-end',
       showConfirmButton: false,
+    });
+  }
+
+  function showCreditsRequiredPopup(details = {}) {
+    const jobLine = details.city || details.jobId
+      ? '<br><span style="font-size:0.86em;opacity:.78;">' +
+        text.escapeHtml([details.city, details.jobId].filter(Boolean).join(' · ')) +
+        '</span>'
+      : '';
+
+    Swal.fire({
+      title: 'Job search is free',
+      html:
+        '<span style="font-size:0.95em;">A matching job was found, but booking requires paid access. ' +
+        'Open the extension and choose <strong>30-Day</strong> or <strong>Pro</strong> access to continue.</span>' +
+        jobLine,
+      icon: 'info',
+      confirmButtonText: 'OK',
     });
   }
 
@@ -173,6 +191,7 @@
     renderPollingToast,
     showJobsReceivedToast,
     showJobFoundToast,
+    showCreditsRequiredPopup,
     showBookingConfirmedToast,
     closePollingToast,
   });

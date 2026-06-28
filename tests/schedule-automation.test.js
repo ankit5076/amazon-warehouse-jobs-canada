@@ -153,10 +153,97 @@ describe("schedule automation", () => {
 
         harness.automation.start();
         vi.advanceTimersByTime(0);
-        vi.advanceTimersByTime(globalThis.AMZ_CONSTANTS.SCHEDULE_AUTOMATION.HARD_STOP_MS + 1000);
+        vi.advanceTimersByTime(globalThis.AMZ_CONSTANTS.SCHEDULE_AUTOMATION.HARD_STOP_DELAY_MS + 1000);
 
         expect(harness.clickElement).toHaveBeenCalledWith(button, "schedule apply");
         expect(globalThis.window.location.href).toBe(initialUrl);
+    });
+
+    it("does not click Apply again when schedule automation restarts before navigation", () => {
+        const scheduleApplySelector = 'button[data-test-id="ScheduleCardSelectScheduleLink"]';
+        const button = {
+            textContent: "Apply",
+            getAttribute: vi.fn(() => null),
+            closest: vi.fn(() => ({ innerText: "Shift card" })),
+        };
+        const harness = setupHarness({
+            elementsBySelector: {
+                [scheduleApplySelector]: [button],
+            },
+        });
+
+        harness.automation.start();
+        vi.advanceTimersByTime(0);
+        harness.automation.start();
+        vi.advanceTimersByTime(0);
+
+        const applyClicks = harness.clickElement.mock.calls.filter(
+            call => call[1] === "schedule apply"
+        );
+        expect(applyClicks).toHaveLength(1);
+    });
+
+    it("does not click Apply again after the content script reloads before navigation", () => {
+        const scheduleApplySelector = 'button[data-test-id="ScheduleCardSelectScheduleLink"]';
+        const button = {
+            textContent: "Apply",
+            getAttribute: vi.fn(() => null),
+            closest: vi.fn(() => ({ innerText: "Shift card" })),
+        };
+        const harness = setupHarness({
+            elementsBySelector: {
+                [scheduleApplySelector]: [button],
+            },
+        });
+
+        harness.automation.start();
+        vi.advanceTimersByTime(0);
+
+        unloadSharedNamespaces(["AMZ_SCHEDULE_AUTOMATION"]);
+        loadSharedScripts(["content/utils/schedule-automation.js"]);
+        const reloadedAutomation = globalThis.AMZ_SCHEDULE_AUTOMATION.create({
+            isActive: () => true,
+        });
+
+        reloadedAutomation.start();
+        vi.advanceTimersByTime(0);
+
+        const applyClicks = harness.clickElement.mock.calls.filter(
+            call => call[1] === "schedule apply"
+        );
+        expect(applyClicks).toHaveLength(1);
+    });
+
+    it("does not fall through to desktop Apply while a schedule Apply click is in flight", () => {
+        const scheduleApplySelector = 'button[data-test-id="ScheduleCardSelectScheduleLink"]';
+        const desktopApplySelector = 'button[data-test-id="jobDetailApplyButtonDesktop"]';
+        let scheduleApplyVisible = true;
+        const scheduleButton = {
+            textContent: "Apply",
+            getAttribute: vi.fn(() => null),
+            closest: vi.fn(() => ({ innerText: "Shift card" })),
+        };
+        const desktopButton = {
+            textContent: "Apply",
+            getAttribute: vi.fn(() => null),
+            closest: vi.fn(() => ({ innerText: "Desktop apply" })),
+        };
+        const harness = setupHarness({
+            elementsBySelector: {
+                [scheduleApplySelector]: () => (scheduleApplyVisible ? [scheduleButton] : []),
+                [desktopApplySelector]: () => [desktopButton],
+            },
+        });
+
+        harness.automation.start();
+        vi.advanceTimersByTime(0);
+        scheduleApplyVisible = false;
+        harness.automation.start();
+        vi.advanceTimersByTime(0);
+
+        expect(harness.clickElement).toHaveBeenCalledTimes(1);
+        expect(harness.clickElement).toHaveBeenCalledWith(scheduleButton, "schedule apply");
+        expect(harness.clickElement).not.toHaveBeenCalledWith(desktopButton, "desktop apply");
     });
 
     it("ignores queued animation-frame callbacks after stop", () => {

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
-const DIST = resolve(ROOT, "dist", "amazon-shifts");
+const DIST = resolve(ROOT, "dist", "amazon-warehouse-ca");
 
 function contextBody(buildScript, name) {
     const match = buildScript.match(new RegExp(`${name}: Object\\.freeze\\(\\[([\\s\\S]*?)\\]\\),`));
@@ -15,12 +15,12 @@ function contextBody(buildScript, name) {
 }
 
 describe("production bundling", () => {
-    it("keeps application observability local and excludes external service modules", () => {
+    it("keeps application observability scripts in production content bundles", () => {
         const buildScript = readFileSync(resolve(ROOT, "scripts", "build.js"), "utf8");
         const applicationContent = contextBody(buildScript, "APPLICATION_CONTENT");
         const mainContent = contextBody(buildScript, "MAIN_CONTENT");
-        const backgroundDeps = contextBody(buildScript, "BACKGROUND_DEPS");
 
+        expect(applicationContent).toContain('"shared/api-client.js"');
         expect(applicationContent).toContain('"content/utils/application-observability.js"');
         expect(applicationContent).toContain('"content/utils/direct-application-mode.js"');
         expect(applicationContent.indexOf('"content/utils/application-observability.js"'))
@@ -32,16 +32,8 @@ describe("production bundling", () => {
         expect(mainContent).not.toContain('"shared/job-found-channel.js"');
         expect(mainContent.indexOf('"content/utils/application-observability.js"'))
             .toBeLessThan(mainContent.indexOf('"content/fetch.js"'));
-
-        for (const body of [applicationContent, mainContent, backgroundDeps, buildScript]) {
-            expect(body).not.toContain("shared/api-client.js");
-            expect(body).not.toContain("shared/validation.js");
-            expect(body).not.toContain("shared/notifications.js");
-            expect(body).not.toContain("background/telegram.js");
-            expect(body).not.toContain("background/notification-service.js");
-            expect(body).not.toContain("JOB_FOUND_CHANNEL");
-            expect(body).not.toContain("job-found-channel");
-        }
+        expect(buildScript).not.toContain("JOB_FOUND_CHANNEL");
+        expect(buildScript).not.toContain("job-found-channel");
     });
 
     it("builds a self-contained MV3 dist with a stable WAF bridge resource", () => {
@@ -54,12 +46,6 @@ describe("production bundling", () => {
         expect(output).toContain("bundle verification passed");
 
         const manifest = JSON.parse(readFileSync(resolve(DIST, "manifest.json"), "utf8"));
-        expect(manifest.host_permissions).toEqual([
-            "https://hiring.amazon.ca/*",
-            "https://hiring.amazon.com/*",
-            "*://auth.hiring.amazon.com/*",
-            "*://auth.hiring.amazon.ca/*",
-        ]);
         const resources = manifest.web_accessible_resources.flatMap(entry => entry.resources || []);
         expect(resources).toContain("direct-waf-bridge-page.js");
         expect(existsSync(resolve(DIST, "direct-waf-bridge-page.js"))).toBe(true);

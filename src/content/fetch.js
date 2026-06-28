@@ -15,6 +15,7 @@
   if (root.AMZ_URL.isSkipPage()) return;
 
   const state = root.AMZ_STATE;
+  const account = root.AMZ_ACCOUNT;
   const cityTagsUtil = root.AMZ_CITY_TAGS;
   const jobMatcher = root.AMZ_JOB_MATCH;
   const toasts = root.AMZ_TOASTS;
@@ -44,7 +45,7 @@
     },
     authProbeStatus: AUTH_PROBE.STATUSES.CHECKING,
     useDirectApplication: DIRECT_APPLICATION.useDirectApplication !== false,
-    runtimeAllowed: true,
+    runtimeAllowed: false,
     runtimePolicyCheckedAt: 0,
     lastApiMeta: { state: 'idle' },
     graphqlWafBackoffUntil: 0,
@@ -54,7 +55,6 @@
     isActive: () => pollerState.isActive,
     onNoApplyPath: handleNoApplyPath,
   });
-  let myApplicationsSelectShiftsCleanup = null;
   let noApplyJobSearchRedirectTimer = null;
   let noApplyScheduleRecoveryInProgress = false;
   let authRedirectInProgress = false;
@@ -173,8 +173,6 @@
   }
 
   async function ensureRuntimeAllowed(options = {}) {
-    void options;
-    await syncRuntimeControlsToPollingState(root.AMZ_CONSTANTS.LOCAL_DEFAULTS.CONTROLS);
     pollerState.runtimeAllowed = true;
     pollerState.runtimePolicyCheckedAt = Date.now();
     return true;
@@ -222,7 +220,6 @@
     pollerState.authProbeStatus =
       stored[STORAGE_KEYS.AUTH_PROBE_STATUS] || AUTH_PROBE.STATUSES.CHECKING;
     applyIntervalSettings(stored);
-    await syncRuntimeControlsToPollingState(root.AMZ_CONSTANTS.LOCAL_DEFAULTS.CONTROLS);
     await ensureSelectedCityTag();
     log.info('runtime settings loaded', summarizeSettings());
     log.debug('runtime settings detail', {
@@ -343,7 +340,6 @@
   }
 
   async function ensureSelectedClientForAutomation(reason) {
-    void reason;
     return true;
   }
 
@@ -435,7 +431,7 @@
     if (!schedule?.scheduleId) return;
     void root.AMZ_STORAGE?.setLocal?.({
       [STORAGE_KEYS.LAST_SELECTED_SCHEDULE]: {
-        selectedAt: new Date().toISOString(),
+        selectedAt: root.AMZ_TIME?.nowIstIso?.() || new Date().toISOString(),
         source: 'schedule-graphql-recovery',
         pageUrl: window.location.href,
         jobId: schedule.jobId || details.jobId || root.AMZ_URL.getJobIdFromUrl(),
@@ -791,6 +787,20 @@
     }
     if (!matchedJob) return null;
 
+    const paidGate = await root.AMZ_PAYMENT_GATE?.requireAllowed?.({ allowCache: false });
+    if (!paidGate?.ok) {
+      log.warn('matched job blocked by paid license gate', {
+        jobId: matchedJob.jobId || null,
+        reason: paidGate?.reason || 'license-denied',
+      });
+      toasts.showCreditsRequiredPopup({
+        city: matchedJob.city,
+        jobId: matchedJob.jobId || null,
+        reason: paidGate?.reason || 'credits-required',
+      });
+      return null;
+    }
+
     // Sound and metadata are optional side effects and must not delay navigation.
     void root.AMZ_ALERTS.playJobFoundSound();
     toasts.showJobFoundToast(matchedJob.city);
@@ -820,6 +830,34 @@
       log.error('Unable to persist last matched job metadata:', error);
     });
 
+    if (root.AMZ_VALIDATION?.getControls?.()?.features?.telegram !== false) {
+      void account.getStoredLoginUsername().then(clientEmail => {
+        return root.AMZ_NOTIFICATIONS?.emit(root.AMZ_CONSTANTS.NOTIFICATIONS.EVENTS.JOB_FOUND, {
+          jobId: matchedJob.jobId || null,
+          jobTitle: matchedJob.jobTitle || null,
+          city: matchedJob.city || null,
+          state: matchedJob.state || null,
+          locationName: matchedJob.locationName || null,
+          employmentType: matchedJob.employmentTypeL10N || matchedJob.employmentType || null,
+          jobType: matchedJob.jobType || matchedJob.jobTypeL10N || null,
+          pay:
+            matchedJob.totalPayRateMaxL10N ||
+            matchedJob.totalPayRateMinL10N ||
+            matchedJob.totalPayRateMax ||
+            null,
+          clientEmail: clientEmail || null,
+          mode: pollerState.useDirectApplication ? 'direct' : 'manual',
+          pageUrl: jobDetailUrl,
+          jobSnapshot: matchedJob,
+        }, {
+          source: 'job-search-match',
+        });
+      }).catch(error => {
+        log.debug('job-found notification skipped after emit failure', {
+          error: error?.message || String(error),
+        });
+      });
+    }
     if (jobDetailUrl) {
       log.info('opening matched job detail and starting schedule automation', {
         jobDetailUrl,
@@ -835,6 +873,12 @@
   async function fetchJobs() {
     if (!await ensureSelectedClientForAutomation('fetch-jobs')) return;
     if (!await ensureAmazonSessionAuthenticated('fetch-jobs')) return;
+
+    if (!pollerState.runtimeAllowed && root.AMZ_VALIDATION?.isAllowed?.() !== true) {
+      log.warn('fetch skipped because runtime policy is not allowed');
+      stopAutomation();
+      return;
+    }
 
     if (!pollerState.isActive || !root.AMZ_URL.isJobSearchPage()) {
       log.trace('fetchJobs skipped', {
@@ -935,10 +979,6 @@
     getDelayMs: getEffectiveIntervalMs,
   });
 
-  async function readDirectSelectShiftsPending() {
-    return state.getDirectSelectShiftsPending();
-  }
-
   async function readDirectApplicationResult() {
     const stored = await root.AMZ_STORAGE.getLocal(STORAGE_KEYS.DIRECT_APPLICATION_RESULT);
     return stored[STORAGE_KEYS.DIRECT_APPLICATION_RESULT] || null;
@@ -1030,259 +1070,8 @@
     });
     poller.stop();
     scheduleAutomation.stop();
-    myApplicationsSelectShiftsCleanup?.();
     restoreDirectApplicationPage(result);
     return true;
-  }
-
-  function isUsableDirectSelectShiftsPending(pending) {
-    return Boolean(
-      pending &&
-      pending.expiresAt &&
-      Date.now() < pending.expiresAt
-    );
-  }
-
-  async function clearDirectSelectShiftsPending(reason) {
-    log.debug('clearing direct Select shifts handoff', { reason });
-    await state.clearDirectSelectShiftsPending();
-  }
-
-  function findSelectShiftsButton() {
-    const labels = DIRECT_APPLICATION.MY_APPLICATIONS_SELECT_SHIFT_TEXTS || [];
-    const normalizedLabels = labels
-      .map(label => root.AMZ_TEXT.normalizeForComparison(label))
-      .filter(Boolean);
-
-    const isSelectShiftButton = button => {
-      const candidates = [
-        button?.querySelector?.(root.AMZ_CONSTANTS.SELECTORS.CREATE_APPLICATION_ROW_TEXT)?.textContent,
-        button?.innerText,
-        button?.textContent,
-        button?.getAttribute?.('aria-label'),
-        button?.getAttribute?.('title'),
-      ].map(root.AMZ_TEXT.normalizeForComparison).filter(Boolean);
-
-      return normalizedLabels.some(label =>
-        candidates.some(candidate => candidate === label || candidate.includes(label))
-      );
-    };
-
-    const extractJobId = element => {
-      const textContent = root.AMZ_TEXT.normalizeWhitespace(element?.textContent || '');
-      const labelMatch = textContent.match(/Job\s*Id:\s*(JOB-[A-Z]+-\d+)/i);
-      if (labelMatch) return labelMatch[1];
-
-      const anyMatch = textContent.match(/\bJOB-[A-Z]+-\d+\b/i);
-      return anyMatch ? anyMatch[0] : null;
-    };
-
-    const isActivePanel = element => {
-      const fingerprint = [
-        element?.id,
-        element?.getAttribute?.('aria-labelledby'),
-        element?.getAttribute?.('data-test-id'),
-        element?.getAttribute?.('data-testid'),
-      ].join(' ').toLowerCase();
-
-      return fingerprint.includes('active') &&
-        !fingerprint.includes('inactive') &&
-        !fingerprint.includes('withdrawn');
-    };
-
-    const activeRoots = Array.from(document.querySelectorAll('[role="tabpanel"], [aria-labelledby]'))
-      .filter(isActivePanel);
-    const roots = activeRoots.length > 0 ? activeRoots : [document];
-    const inactiveLabels = DIRECT_APPLICATION.MY_APPLICATIONS_INACTIVE_SECTION_TEXTS || [];
-    const inactiveMatchers = inactiveLabels.map(label =>
-      new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|\\(|$)', 'i')
-    );
-    const inactiveMarkers = Array.from(document.querySelectorAll('[role="heading"], h1, h2, h3, h4, [data-test-component="StencilText"]'))
-      .filter(element => {
-        const elementText = root.AMZ_TEXT.normalizeWhitespace(element.textContent || '');
-        return inactiveMatchers.some(matcher => matcher.test(elementText));
-      });
-    const isAfterInactiveMarker = element => inactiveMarkers.some(marker =>
-      marker !== element &&
-      Boolean(marker.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
-    );
-
-    const buttons = roots
-      .flatMap(rootElement => Array.from(rootElement.querySelectorAll('button')))
-      .filter(button => isSelectShiftButton(button));
-
-    for (const button of buttons) {
-      if (!dom.isClickable(button)) continue;
-      if (isAfterInactiveMarker(button)) continue;
-
-      const label = labels.find(item => {
-        const normalized = root.AMZ_TEXT.normalizeForComparison(item);
-        return root.AMZ_TEXT.normalizeForComparison(button.textContent || '').includes(normalized);
-      }) || labels[0] || 'Select shift';
-      const card = button.closest?.('[data-test-component="StencilReactCard"], [data-testid*="application"], [class*="applicationCard"]') || null;
-      return {
-        button,
-        label,
-        card,
-        jobId: extractJobId(card || button),
-        activeRootFound: activeRoots.length > 0,
-        buttonCount: buttons.length,
-      };
-    }
-
-    return {
-      button: null,
-      label: null,
-      card: null,
-      jobId: null,
-      activeRootFound: activeRoots.length > 0,
-      buttonCount: buttons.length,
-    };
-  }
-
-  function canStartMyApplicationsActiveSelectShiftScan() {
-    return DIRECT_APPLICATION.MY_APPLICATIONS_ACTIVE_SELECT_SHIFT_ENABLED !== false;
-  }
-
-  async function resolveMyApplicationsSelectShiftMode() {
-    const pending = await readDirectSelectShiftsPending();
-    if (isUsableDirectSelectShiftsPending(pending)) {
-      if (pending.status === 'clicked') {
-        return { mode: 'already-clicked', pending };
-      }
-      return { mode: 'direct-handoff', pending };
-    }
-
-    if (pending) await clearDirectSelectShiftsPending('expired before my applications');
-    if (!canStartMyApplicationsActiveSelectShiftScan()) {
-      return { mode: 'disabled', pending: null };
-    }
-    return { mode: 'active-applications', pending: null };
-  }
-
-  async function handleJobDetailAfterDirectSelectShifts() {
-    if (!pollerState.isActive || !root.AMZ_URL.isJobDetailPage()) return false;
-
-    const pending = await readDirectSelectShiftsPending();
-    if (!isUsableDirectSelectShiftsPending(pending)) {
-      if (pending) await clearDirectSelectShiftsPending('expired before job detail');
-      return false;
-    }
-    if (pending.status !== 'clicked') return false;
-
-    log.info('job detail reached after Select shifts; starting schedule automation', {
-      jobId: pending.jobId,
-      scheduleId: pending.scheduleId,
-      applicationId: pending.applicationId,
-    });
-    await clearDirectSelectShiftsPending('job detail reached');
-    scheduleAutomation.start();
-    return true;
-  }
-
-  async function handleMyApplicationsSelectShifts() {
-    if (!pollerState.isActive || !root.AMZ_URL.isMyApplicationsPage()) return;
-    if (myApplicationsSelectShiftsCleanup) return;
-
-    const { mode, pending } = await resolveMyApplicationsSelectShiftMode();
-    if (mode === 'disabled' || mode === 'already-clicked') return;
-
-    log.debug('my applications Select shifts automation started', {
-      mode,
-      jobId: pending?.jobId || null,
-      scheduleId: pending?.scheduleId || null,
-      applicationId: pending?.applicationId || null,
-    });
-
-    let observer = null;
-    let interval = null;
-    let timeout = null;
-    let finished = false;
-
-    const cleanup = () => {
-      observer?.disconnect();
-      if (interval) clearInterval(interval);
-      if (timeout) clearTimeout(timeout);
-      observer = null;
-      interval = null;
-      timeout = null;
-      if (myApplicationsSelectShiftsCleanup === cleanup) {
-        myApplicationsSelectShiftsCleanup = null;
-      }
-    };
-    myApplicationsSelectShiftsCleanup = cleanup;
-
-    const clickSelectShifts = async (match) => {
-      if (finished || !pollerState.isActive) return;
-      finished = true;
-
-      if (pending) {
-        const clickedAt = Date.now();
-        await state.setDirectSelectShiftsPending({
-          ...pending,
-          status: 'clicked',
-          clickedAt,
-          clickPageUrl: window.location.href,
-          clickedLabel: match.label,
-        });
-      }
-
-      const clicked = dom.clickElement(match.button, 'my applications select shifts');
-      log.info('my applications Select shifts clicked', {
-        mode,
-        clicked,
-        label: match.label,
-        jobId: pending?.jobId || match.jobId || null,
-      });
-      log.debug('my applications Select shifts click detail', {
-        mode,
-        clicked,
-        label: match.label,
-        jobId: pending?.jobId || match.jobId || null,
-        button: dom.describeButton(match.button),
-      });
-      cleanup();
-      if (clicked) scheduleAutomation.start();
-    };
-
-    const scan = () => {
-      if (finished || !pollerState.isActive || !root.AMZ_URL.isMyApplicationsPage()) {
-        cleanup();
-        return;
-      }
-
-      if (pending && Date.now() >= pending.expiresAt) {
-        void clearDirectSelectShiftsPending('my applications handoff expired').finally(cleanup);
-        return;
-      }
-
-      const match = findSelectShiftsButton();
-      log.trace('my applications Select shifts scan', {
-        mode,
-        found: !!match.button,
-        label: match.label,
-        jobId: pending?.jobId || match.jobId || null,
-        activeRootFound: match.activeRootFound,
-        buttonCount: match.buttonCount,
-      }, {
-        throttleKey: 'my-applications-select-shifts-scan',
-        throttleMs: root.AMZ_CONSTANTS.LOGGING.HIGH_FREQUENCY_THROTTLE_MS,
-      });
-      if (match.button) void clickSelectShifts(match);
-    };
-
-    observer = new MutationObserver(scan);
-    observer.observe(document.body, { childList: true, subtree: true });
-    interval = setInterval(scan, DIRECT_APPLICATION.MY_APPLICATIONS_SELECT_SHIFT_INTERVAL_MS);
-    timeout = setTimeout(() => {
-      log.warn('my applications Select shifts timeout', { mode });
-      if (pending) {
-        void clearDirectSelectShiftsPending('my applications Select shifts timeout').finally(cleanup);
-        return;
-      }
-      cleanup();
-    }, DIRECT_APPLICATION.MY_APPLICATIONS_SELECT_SHIFT_TIMEOUT_MS);
-    scan();
   }
 
   async function handlePageNavigation() {
@@ -1291,7 +1080,6 @@
       isActive: pollerState.isActive,
       isLoginPage: root.AMZ_URL.isLoginPage(),
       isJobSearchPage: root.AMZ_URL.isJobSearchPage(),
-      isMyApplicationsPage: root.AMZ_URL.isMyApplicationsPage(),
       isJobDetailPage: root.AMZ_URL.isJobDetailPage(),
     });
     void root.AMZ_IDENTITY.syncEmailFromPage().catch(error => {
@@ -1318,6 +1106,15 @@
       return;
     }
 
+    if (
+      pollerState.isActive &&
+      !pollerState.runtimeAllowed &&
+      root.AMZ_VALIDATION?.isAllowed?.() !== true
+    ) {
+      log.warn('page automation paused because cached runtime policy is not allowed');
+      stopAutomation();
+      return;
+    }
     if (pollerState.isActive && await pauseForDirectApplicationIfNeeded()) return;
 
     if (root.AMZ_URL.isJobSearchPage() && pollerState.isActive) {
@@ -1326,9 +1123,7 @@
       poller.start();
     }
 
-    await handleMyApplicationsSelectShifts();
-    const handledDirectJobDetail = await handleJobDetailAfterDirectSelectShifts();
-    if (!handledDirectJobDetail && root.AMZ_URL.isJobDetailPage() && pollerState.isActive) {
+    if (root.AMZ_URL.isJobDetailPage() && pollerState.isActive) {
       log.debug('job detail page active; starting schedule automation');
       scheduleAutomation.start();
     }
@@ -1339,7 +1134,6 @@
     clearNoApplyJobSearchRedirect();
     poller.stop();
     scheduleAutomation.stop();
-    myApplicationsSelectShiftsCleanup?.();
     toasts.closePollingToast();
   }
 
@@ -1377,6 +1171,12 @@
     if (changes[STORAGE_KEYS.CITY_TAGS]) {
       pollerState.cityTags = changes[STORAGE_KEYS.CITY_TAGS].newValue || [];
       shouldRenderPollingStatus = true;
+    }
+    if (changes[STORAGE_KEYS.SELECTED_CLIENT_ID]) {
+      pollerState.selectedClientId = String(changes[STORAGE_KEYS.SELECTED_CLIENT_ID].newValue || '').trim();
+      if (pollerState.isActive && !await ensureSelectedClientForAutomation('selected-client-cleared')) {
+        return;
+      }
     }
     if (changes[STORAGE_KEYS.AUTH_PROBE_STATUS]) {
       pollerState.authProbeStatus =
@@ -1508,6 +1308,8 @@
       });
       if (pollerState.isActive) {
         void (async () => {
+          const hasClient = await ensureSelectedClientForAutomation('runtime-message');
+          if (!hasClient) return;
           const allowed = await ensureRuntimeAllowed({ allowCache: false, refresh: true });
           if (allowed) handlePageNavigation();
         })();

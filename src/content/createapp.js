@@ -7,14 +7,20 @@
     return;
   }
 
-  const { CREATE_APPLICATION } = root.AMZ_CONSTANTS;
+  const { CREATE_APPLICATION, STORAGE_KEYS } = root.AMZ_CONSTANTS;
   const dom = root.AMZ_DOM;
+  const storage = root.AMZ_STORAGE;
   let enabled = false;
-  let redirectTimer = null;
   let postNextTimer = null;
+  let manualScanInterval = null;
+  let manualScanDeadlineMs = 0;
   let observer = null;
+  let routeWatcherInstalled = false;
+  let lastObservedUrl = '';
   let nextClicked = false;
   let createClicked = false;
+  let lastAutomationUrl = '';
+  let selectThisJobClickUrl = '';
   const log = root.AMZ_LOGGER.create('[create-application]', {
     enabled: () => enabled,
     workflow: 'create-application-ui',
@@ -60,29 +66,124 @@
     return true;
   }
 
-  function scheduleRedirect() {
-    if (!directApplicationMode.isEnabled()) {
-      log.debug('post-create redirect skipped because direct application is disabled');
-      return;
-    }
+  function resetRouteClickState() {
+    const currentUrl = window.location.href;
+    if (currentUrl === lastAutomationUrl) return;
+    lastAutomationUrl = currentUrl;
+    nextClicked = false;
+    createClicked = false;
+    selectThisJobClickUrl = '';
+  }
 
-    clearTimeout(redirectTimer);
-    redirectTimer = setTimeout(() => {
-      if (enabled) window.location.href = CREATE_APPLICATION.REDIRECT_URL;
-    }, CREATE_APPLICATION.REDIRECT_DELAY_MS);
+  function isManualMode() {
+    return !directApplicationMode.isEnabled();
+  }
+
+  function isManualFinalApplicationFormRoute() {
+    return (
+      isManualMode() &&
+      root.AMZ_URL.isFinalApplicationFormPage?.() === true
+    );
+  }
+
+  function findButtonByTexts(...labels) {
+    for (const label of labels.flat().filter(Boolean)) {
+      const button = dom.findButtonByText(label);
+      if (button) return button;
+    }
+    return null;
+  }
+
+  function scheduleRescan(trigger, delayMs = CREATE_APPLICATION.POST_ACTION_RESCAN_MS) {
+    clearTimeout(postNextTimer);
+    postNextTimer = setTimeout(
+      () => attemptAutomation(trigger),
+      delayMs
+    );
+  }
+
+  function stopManualResponsiveScan() {
+    if (manualScanInterval) clearInterval(manualScanInterval);
+    manualScanInterval = null;
+    manualScanDeadlineMs = 0;
+  }
+
+  function startManualResponsiveScanWindow(trigger = 'manual responsive scan') {
+    if (!enabled || !isManualMode()) return;
+    if (isManualFinalApplicationFormRoute()) return;
+
+    manualScanDeadlineMs = Date.now() + CREATE_APPLICATION.ROUTE_SCAN_TIMEOUT_MS;
+    if (manualScanInterval) return;
+
+    manualScanInterval = setInterval(() => {
+      if (!enabled || !isManualMode()) {
+        stopManualResponsiveScan();
+        return;
+      }
+      if (Date.now() > manualScanDeadlineMs) {
+        stopManualResponsiveScan();
+        return;
+      }
+      attemptAutomation(trigger);
+    }, CREATE_APPLICATION.ROUTE_SCAN_INTERVAL_MS);
+  }
+
+  function handleRouteChanged(trigger) {
+    const currentUrl = window.location.href;
+    if (currentUrl === lastObservedUrl) return;
+    lastObservedUrl = currentUrl;
+    if (!enabled || !isManualMode()) return;
+
+    startManualResponsiveScanWindow(trigger + ' poll');
+    scheduleRescan(trigger, CREATE_APPLICATION.ROUTE_CHANGE_RESCAN_MS);
+  }
+
+  function installRouteWatcher() {
+    if (routeWatcherInstalled || typeof window === 'undefined') return;
+    routeWatcherInstalled = true;
+    lastObservedUrl = window.location.href;
+
+    const wrapHistoryMethod = method => {
+      const original = window.history?.[method];
+      if (typeof original !== 'function') return;
+      try {
+        window.history[method] = function (...args) {
+          const result = original.apply(this, args);
+          handleRouteChanged('route ' + method);
+          return result;
+        };
+      } catch (error) {
+        log.debug('route watcher history hook failed', {
+          method,
+          message: error?.message || String(error),
+        });
+      }
+    };
+
+    wrapHistoryMethod('pushState');
+    wrapHistoryMethod('replaceState');
+    window.addEventListener?.('hashchange', () => handleRouteChanged('route hashchange'));
+    window.addEventListener?.('popstate', () => handleRouteChanged('route popstate'));
   }
 
   function cleanup() {
     observer?.disconnect();
     observer = null;
-    if (redirectTimer) clearTimeout(redirectTimer);
     if (postNextTimer) clearTimeout(postNextTimer);
-    redirectTimer = null;
+    stopManualResponsiveScan();
     postNextTimer = null;
   }
 
   function attemptAutomation(trigger = 'scan') {
-    if (!enabled || createClicked) return;
+    if (!enabled) return;
+    resetRouteClickState();
+    if (isManualFinalApplicationFormRoute()) {
+      log.info('manual application form route opened; stopping native UI automation', {
+        url: window.location.href,
+      });
+      cleanup();
+      return;
+    }
     if (directBookingShouldSuppressUiFallback()) {
       log.debug('direct application exists or is being confirmed; skipping UI Create Application automation');
       cleanup();
@@ -91,30 +192,48 @@
 
     const nextButton = nextClicked
       ? null
-      : dom.findButtonByText(CREATE_APPLICATION.BUTTON_TEXT.NEXT);
-    const createButton = dom.findButtonByText(CREATE_APPLICATION.BUTTON_TEXT.CREATE_APPLICATION);
+      : findButtonByTexts(CREATE_APPLICATION.BUTTON_TEXT.NEXT);
+    const createButton = createClicked
+      ? null
+      : findButtonByTexts(
+        CREATE_APPLICATION.BUTTON_TEXT.CREATE_APPLICATION,
+        CREATE_APPLICATION.BUTTON_TEXT.START_APPLICATION
+      );
+    const selectThisJobButton = selectThisJobClickUrl === window.location.href
+      ? null
+      : findButtonByTexts(CREATE_APPLICATION.BUTTON_TEXT.SELECT_THIS_JOB);
 
     log.debug('automation scan: ' + trigger, {
       nextButton: dom.describeButton(nextButton),
       createButton: dom.describeButton(createButton),
+      selectThisJobButton: dom.describeButton(selectThisJobButton),
       nextClicked,
       createClicked,
+      selectThisJobClickUrl,
     });
 
     if (nextButton && clickButton(nextButton, 'next')) {
       nextClicked = true;
-      clearTimeout(postNextTimer);
-      postNextTimer = setTimeout(
-        () => attemptAutomation('post-next rescan'),
-        CREATE_APPLICATION.POST_NEXT_RESCAN_MS
-      );
+      startManualResponsiveScanWindow('post-next poll');
+      scheduleRescan('post-next rescan');
       return;
     }
 
     if (createButton && clickButton(createButton, 'create application')) {
       createClicked = true;
-      cleanup();
-      scheduleRedirect();
+      if (directApplicationMode.isEnabled()) {
+        cleanup();
+      } else {
+        startManualResponsiveScanWindow('post-create poll');
+        scheduleRescan('post-create rescan');
+      }
+      return;
+    }
+
+    if (selectThisJobButton && clickButton(selectThisJobButton, 'select this job')) {
+      selectThisJobClickUrl = window.location.href;
+      startManualResponsiveScanWindow('post-select-this-job poll');
+      scheduleRescan('post-select-this-job rescan');
     }
   }
 
@@ -127,6 +246,8 @@
     }
     observer.observe(document.body, { childList: true, subtree: true });
     attemptAutomation('initial scan');
+    installRouteWatcher();
+    startManualResponsiveScanWindow('initial manual poll');
   }
 
   function setEnabled(nextEnabled) {
@@ -138,8 +259,11 @@
     }
 
     if (!wasEnabled) {
+      lastObservedUrl = window.location.href;
+      lastAutomationUrl = '';
       nextClicked = false;
       createClicked = false;
+      selectThisJobClickUrl = '';
     }
     ensureObserver();
   }
@@ -152,14 +276,26 @@
 
   chrome.runtime.onMessage.addListener(message => {
     if (message?.action === root.AMZ_CONSTANTS.MESSAGE_ACTIONS.EXTENSION_STATE_CHANGED) {
-      setEnabled(message.status === true);
+      if (message.status !== true) {
+        setEnabled(false);
+        return;
+      }
+      if (!root.AMZ_PAYMENT_GATE?.requireAllowed && typeof process !== 'undefined' && process.env?.NODE_ENV === 'test') {
+        setEnabled(true);
+        return;
+      }
+      root.AMZ_PAYMENT_GATE?.requireAllowed?.({ allowCache: true })
+        .then(result => setEnabled(result?.ok === true))
+        .catch(() => setEnabled(false));
     }
   });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== 'local' || !changes[root.AMZ_CONSTANTS.STORAGE_KEYS.USE_DIRECT_APPLICATION]) return;
+    if (areaName !== 'local') return;
+
+    if (!changes[STORAGE_KEYS.USE_DIRECT_APPLICATION]) return;
     directApplicationMode.setEnabled(
-      changes[root.AMZ_CONSTANTS.STORAGE_KEYS.USE_DIRECT_APPLICATION].newValue
+      changes[STORAGE_KEYS.USE_DIRECT_APPLICATION].newValue
     );
     if (!enabled) return;
     if (directApplicationMode.isEnabled()) {
@@ -169,10 +305,15 @@
     ensureObserver();
   });
 
-  const storage = await root.AMZ_STORAGE.getLocal([
-    root.AMZ_CONSTANTS.STORAGE_KEYS.ACTIVE,
-    root.AMZ_CONSTANTS.STORAGE_KEYS.USE_DIRECT_APPLICATION,
+  const initialStorage = await root.AMZ_STORAGE.getLocal([
+    STORAGE_KEYS.ACTIVE,
+    STORAGE_KEYS.USE_DIRECT_APPLICATION,
   ]);
-  directApplicationMode.setEnabled(storage[root.AMZ_CONSTANTS.STORAGE_KEYS.USE_DIRECT_APPLICATION]);
-  setEnabled(storage[root.AMZ_CONSTANTS.STORAGE_KEYS.ACTIVE] === true);
+  directApplicationMode.setEnabled(initialStorage[STORAGE_KEYS.USE_DIRECT_APPLICATION]);
+  const paidGate = initialStorage[STORAGE_KEYS.ACTIVE] === true
+    ? (root.AMZ_PAYMENT_GATE?.requireAllowed
+      ? await root.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true }).catch(() => null)
+      : (typeof process !== 'undefined' && process.env?.NODE_ENV === 'test' ? { ok: true } : null))
+    : null;
+  setEnabled(paidGate?.ok === true);
 })(typeof globalThis !== 'undefined' ? globalThis : self);

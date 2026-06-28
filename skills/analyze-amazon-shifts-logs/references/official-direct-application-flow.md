@@ -296,6 +296,36 @@ Expected route:
 #/job-opportunities?applicationId=<applicationId>
 ```
 
+## Manual Native Selected-Schedule Flow
+
+When the extension's direct application mode is disabled, Amazon's own UI may complete a selected-schedule booking through native buttons rather than extension direct APIs. A captured CA manual flow showed this route/API shape:
+
+```text
+#/consent?...applicationId=<id>&jobId=<jobId>&scheduleId=<scheduleId>
+POST /application/api/candidate-application/ds/create-application/
+PUT  /application/api/candidate-application/update-application
+#/job-opportunities?...applicationId=<id>&jobId=<jobId>&scheduleId=<scheduleId>
+#/job-opportunities/job-confirmation?...applicationId=<id>&jobId=<jobId>&scheduleId=<scheduleId>
+PUT  /application/api/candidate-application/update-application
+#/general-questions?...applicationId=<id>&jobId=<jobId>&scheduleId=<scheduleId>
+```
+
+Official production JS also shows two possible create/consent button labels. The standard consent button is keyed as `BB-ConsentPage-create-application-button` with default text `Create Application`; a MENA variant uses `BB-ConsentPage-start-application-button-mena` with default text `Start application`. The consent button can remain disabled until the job, candidate, optional schedule detail, non-loading state, and any required data-policy checkbox are satisfied.
+
+The native UI button text observed on the intermediate schedule/job routes is:
+
+```text
+Select this job
+```
+
+The route/page-event sequence from the captured manual flow rendered `#/job-opportunities` as a schedule/job selection page, then `#/job-opportunities/job-confirmation` as a preview/confirmation page, then `#/general-questions` as the first final application form page. The production JS exposes other later form buttons such as `Next`, `Confirm Selection`, `Confirm selection and continue`, and `Submit`, but those belong after the application form has opened and should not be treated as booking-handoff clicks by the extension.
+
+Production JS also contains a duplicate-window modal with `Continue application` and `Return to dashboard`. Treat that as an operator-visible recovery choice unless a future log/HAR proves a safe automatic handling rule; do not blindly click it as part of selected-schedule booking.
+
+For extension manual mode, treat a final application form route such as `#/general-questions`, `#/self-identification`, or `#/application-experience` with `applicationId`, `jobId`, and selected `scheduleId` as the final form-opened success signal for Telegram and terminal observability. Do not use this final-form signal to duplicate direct-mode success, because direct mode already emits success after `job-confirm`.
+
+For direct-mode resumed/existing applications that are already `JOB_SELECTED`, do not jump straight to `#/general-questions` while Amazon still reports `workflowStepName: "job-opportunities"`. If the selected schedule later returns `UNPOSTED` and `get-all-schedules` returns zero, Amazon's own `job-opportunities` route can move the page to `#/no-available-shift` even though the application still has `jobScheduleSelected.scheduleId`. Before a direct final-form handoff to `#/general-questions`, update `/application/api/candidate-application/update-workflow-step-name` to `general-questions` or use a route consistent with the current workflow state.
+
 ## Selected Schedule Unavailable Before Create
 
 This is the official fallback guarded by `ENABLE_EMPTY_SCHEDULE_CHECK`.

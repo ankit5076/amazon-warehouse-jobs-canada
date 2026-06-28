@@ -171,7 +171,7 @@
 
   function buildLastMatchedJobMetadata(matchedJob, options = {}) {
     return {
-      matchedAt: new Date().toISOString(),
+      matchedAt: root.AMZ_TIME?.nowIstIso?.() || new Date().toISOString(),
       selectedCity: options.selectedCity || '',
       cityTags: options.matchingTags || [],
       distance: options.distance || '',

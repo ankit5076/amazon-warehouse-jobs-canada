@@ -4,12 +4,20 @@ globalThis.AMZ_IS_SERVICE_WORKER = true;
 try {
   importScripts(
     '../shared/constants.js',
+    '../shared/utils/time.js',
     '../shared/utils/logger.js',
     '../shared/utils/text.js',
     '../shared/utils/storage.js',
     '../shared/utils/account.js',
     '../shared/utils/url.js',
     '../shared/utils/messaging.js',
+    '../shared/utils/license-api.js',
+    '../shared/utils/license-state.js',
+    '../shared/utils/payment-gate.js',
+    '../shared/api-client.js',
+    '../shared/validation.js',
+    './telegram.js',
+    './notification-service.js',
     './tab-service.js'
   );
 } catch (error) {
@@ -23,6 +31,7 @@ try {
 const {
   AMAZON,
   INSTALL_DEFAULTS,
+  MESSAGE_ACTIONS,
   STORAGE_KEYS,
 } = globalThis.AMZ_CONSTANTS;
 const log = globalThis.AMZ_LOGGER.create('[service-worker]', {
@@ -45,6 +54,8 @@ function configureSessionStorageAccessLevel() {
 }
 
 configureSessionStorageAccessLevel();
+globalThis.AMZ_VALIDATION?.startup();
+globalThis.AMZ_BACKGROUND_NOTIFICATIONS?.flushQueue?.().catch(() => {});
 
 function configureActionVisibility() {
   chrome.action.disable();
@@ -56,12 +67,20 @@ function configureActionVisibility() {
   });
 }
 
+async function ensureInactiveWithoutValidRuntime() {
+  return { stale: false, valid: true };
+}
+
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   configureActionVisibility();
 
   if (reason === 'install') {
     await globalThis.AMZ_STORAGE.setLocal(INSTALL_DEFAULTS);
     chrome.tabs.create({ url: AMAZON.URLS.JOB_SEARCH });
+  }
+
+  if (reason === 'install' || reason === 'update') {
+    await ensureInactiveWithoutValidRuntime();
   }
 });
 
@@ -78,6 +97,26 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
+  if (changes[STORAGE_KEYS.LICENSE_EMAIL] || changes[STORAGE_KEYS.OPERATOR_USERNAME] || changes[STORAGE_KEYS.LICENSE_STATE]) {
+    globalThis.AMZ_STORAGE.getLocal(STORAGE_KEYS.ACTIVE)
+      .then(storage => {
+        if (storage[STORAGE_KEYS.ACTIVE] !== true) {
+          globalThis.AMZ_TAB_SERVICE.syncExtensionStateToTabs(false);
+          return null;
+        }
+        return ensureInactiveWithoutValidRuntime();
+      })
+      .then(result => {
+        if (result?.stale) return null;
+        return globalThis.AMZ_STORAGE.getLocal(STORAGE_KEYS.ACTIVE);
+      })
+      .then(storage => {
+        if (!storage) return;
+        globalThis.AMZ_TAB_SERVICE.syncExtensionStateToTabs(storage[STORAGE_KEYS.ACTIVE] === true);
+      })
+      .catch(() => {});
+    return;
+  }
   if (!changes[STORAGE_KEYS.ACTIVE]) return;
   globalThis.AMZ_TAB_SERVICE.syncExtensionStateToTabs(
     changes[STORAGE_KEYS.ACTIVE].newValue === true
@@ -85,8 +124,25 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  void sender;
-  void sendResponse;
-  log.debug('unhandled runtime message', { action: message?.action || null });
+  if (message?.action === MESSAGE_ACTIONS.BACKEND_REQUEST) {
+    globalThis.AMZ_API.backendRequest(message.path, message.init || {})
+      .then(result => sendResponse(result))
+      .catch(error => {
+        log.error('Backend request failed:', error);
+        sendResponse({ ok: false, status: 0, error: error.message });
+      });
+    return true;
+  }
+
+  if (message?.action === MESSAGE_ACTIONS.NOTIFICATION_EVENT) {
+    globalThis.AMZ_BACKGROUND_NOTIFICATIONS.sendEvent(message.event || {}, sender)
+      .then(result => sendResponse({ ok: true, result }))
+      .catch(error => {
+        log.error('Notification event failed:', error);
+        sendResponse({ ok: false, error: error.message });
+      });
+    return true;
+  }
+
   return false;
 });

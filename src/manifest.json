@@ -2,9 +2,9 @@
   "action": {
     "default_popup": "popup/index.html",
     "default_icon": {
-      "16": "assets/images/amazon.png",
-      "48": "assets/images/amazon.png",
-      "128": "assets/images/amazon.png"
+      "16": "assets/images/canada-flag.png",
+      "48": "assets/images/canada-flag.png",
+      "128": "assets/images/canada-flag.png"
     }
   },
   "background": {
@@ -14,12 +14,18 @@
     {
       "js": [
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
         "shared/utils/text.js",
         "shared/utils/storage.js",
         "shared/utils/url.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
+        "shared/api-client.js",
         "content/utils/application-observability.js",
+        "shared/notifications.js",
         "content/utils/alerts.js",
         "content/utils/direct-application-api.js",
         "content/utils/direct-application-guard.js",
@@ -41,6 +47,7 @@
       ],
       "js": [
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
         "shared/utils/text.js",
         "shared/utils/storage.js",
@@ -51,8 +58,17 @@
         "shared/utils/runtime-controls.js",
         "shared/utils/state-store.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
         "content/utils/auth-probe.js",
         "content/utils/page-refresh.js",
+        "shared/api-client.js",
+        "shared/validation.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
+        "shared/notifications.js",
         "vendor/sweetalert.js",
         "content/utils/dom.js",
         "content/utils/application-observability.js",
@@ -75,7 +91,7 @@
       "run_at": "document_idle"
     }
   ],
-  "description": "Fastrack amazon jobs \u2014 automatically books Amazon warehouse shifts as soon as a matching slot opens.",
+  "description": "Amazon Warehouse Canada automatically books Canadian Amazon warehouse shifts as soon as a matching slot opens.",
   "externally_connectable": {
     "matches": [
       "https://hiring.amazon.ca/*",
@@ -88,17 +104,19 @@
     "https://hiring.amazon.ca/*",
     "https://hiring.amazon.com/*",
     "*://auth.hiring.amazon.com/*",
-    "*://auth.hiring.amazon.ca/*"
+    "*://auth.hiring.amazon.ca/*",
+    "https://getslotnow.com/*",
+    "http://localhost:8080/*"
   ],
   "icons": {
-    "128": "assets/images/amazon.png",
-    "16": "assets/images/amazon.png",
-    "48": "assets/images/amazon.png"
+    "16": "assets/images/canada-flag.png",
+    "48": "assets/images/canada-flag.png",
+    "128": "assets/images/canada-flag.png"
   },
   "incognito": "spanning",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsULBghh9xeg81ClpMIN0G6pe2fKESk6s3WBuZbK7dT6P4QwIqCNBw9rhyuqR+xvL9pHayqNI9fvvA+ostvjGelvMzak2y91azT8sF2uwQpVxTSeKy+NzKK8fiifx8nDZEdzGNS7lQt7zsCEj3IN4FsWZridnbAXkWC5a4Gu47PtCJVkCVZVDQLxUANSYxTnT1IpukJuBBGHmQfsu4K4IAsJ/gUvB8cgoiZa8tpORUpFjR/i1cbHk2VSCjV8qB01WnIGvVXbsK7XJrgqwoCMIkFqJ8AZUz00GUAM4xZSlyV7sApmLdQz4quvi/57ljcNvfohdWn7aGLYtuD78qFqjPQIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7YUO4NoqFho0Yb48rlM0iIAf0pLwERqpT9956Wt7qxiBuOaDrsLwXQ7J7eGAJFOO0UGRoQXNIbmuzqD1em7AEvQvYgvNmm2XM3avD1G7LWIR5m9E31ots4hoq2Wlk78PRo6TSY6E172LaeoWj4k1/4qfdhEMsC7D+RWOG1m0rNSE4I9fJkMMc8wM66Baf9q7bqjHaPaej/smP7i/tYYqkFRgNUS5R34DSlsAwlsjdVP/+7aAKzN95M4/g4xJOB3Q95aSPN4AjuR8UWVHM7RLBo3qdypawT7nn1vrz3vJ63nIyem/fhR6+WSBC8kwWP6JVlSdVWlQdp3UpXRl9y3AJQIDAQAB",
   "manifest_version": 3,
-  "name": "Fastrack amazon jobs",
+  "name": "Amazon Warehouse Canada",
   "permissions": [
     "tabs",
     "storage",
@@ -107,19 +125,26 @@
     "scripting"
   ],
   "update_url": "https://clients2.google.com/service/update2/crx",
-  "version": "2.10.0",
+  "version": "0.0.1",
   "web_accessible_resources": [
     {
       "matches": [
         "<all_urls>"
       ],
       "resources": [
-        "assets/images/amazon.png",
+        "assets/images/canada-flag.png",
         "assets/sounds/alert.wav",
         "assets/sounds/alert_long.wav",
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
+        "shared/api-client.js",
+        "shared/validation.js",
+        "shared/notifications.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
         "shared/utils/text.js",
         "shared/utils/storage.js",
         "shared/utils/account.js",

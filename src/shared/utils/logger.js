@@ -181,7 +181,7 @@
       return normalized;
     }
 
-    if (value instanceof Date) return value.toISOString();
+    if (value instanceof Date) return root.AMZ_TIME?.formatIstIso?.(value) || value.toISOString();
 
     if (
       typeof Element !== 'undefined' &&

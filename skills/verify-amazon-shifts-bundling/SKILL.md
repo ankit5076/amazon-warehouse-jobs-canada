@@ -33,7 +33,7 @@ npm test -- --run
 npm run verify:bundle
 ```
 
-This command rebuilds `dist/amazon-shifts/` and verifies the generated manifest, referenced files, content-script bundle shapes, version parity, and stable WAF bridge resource.
+This command rebuilds `dist/amazon-warehouse-ca/` and verifies the generated manifest, referenced files, content-script bundle shapes, version parity, and stable WAF bridge resource.
 
 5. Run whitespace/syntax diff hygiene:
 
@@ -41,12 +41,12 @@ This command rebuilds `dist/amazon-shifts/` and verifies the generated manifest,
 git diff --check
 ```
 
-6. In the final answer, report all three gates and whether `dist/amazon-shifts/manifest.json` exposes `direct-waf-bridge-page.js`.
+6. In the final answer, report all three gates and whether `dist/amazon-warehouse-ca/manifest.json` exposes `direct-waf-bridge-page.js`.
 
 ## What The Verifier Protects
 
 - `src/manifest.json` version matches the built manifest.
-- All built manifest references exist in `dist/amazon-shifts/`.
+- All built manifest references exist in `dist/amazon-warehouse-ca/`.
 - Content scripts remain split correctly:
   - `content-application.<hash>.js` at `document_start`
   - `sweetalert.<hash>.js` plus `content-main.<hash>.js` at `document_idle`

@@ -2,7 +2,7 @@
 
 ## Summary
 
-Create one shared extension-wide admin gate so the Amazon Shifts extension is unusable until an admin username is entered and freshly validated by `/api/amazon-shifts/runtime`.
+Create one shared extension-wide admin gate so the amazon-warehouse-ca extension is unusable until an admin username is entered and freshly validated by `/api/amazon-shifts/runtime`.
 
 Chosen behavior:
 
@@ -47,7 +47,7 @@ Chosen behavior:
 - Update content/background tests where available:
   - Active state is forced false on invalid admin.
   - Direct application run is skipped when gate is not allowed.
-- Run `npm test` in `amazon-shifts`.
+- Run `npm test` in `amazon-warehouse-ca`.
 
 ## Assumptions
 

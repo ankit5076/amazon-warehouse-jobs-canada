@@ -97,6 +97,9 @@
     DIRECT_APPLICATION.GUARD_STORAGE_PREFIX + '::booking-confirmed-toast';
   const BOOKING_CONFIRMED_TOAST_TTL_MS = 2 * 60 * 1000;
   const BOOKING_CONFIRMED_TOAST_DURATION_MS = 20000;
+  const FORM_OPENED_NOTIFICATION_TTL_MS = 10 * 60 * 1000;
+  const SUCCESS_HANDOFF_NAVIGATION_TTL_MS = 10 * 60 * 1000;
+  const TERMINAL_BOOKING_SUCCESS_TTL_MS = 10 * 60 * 1000;
 
   function readSessionJson(key) {
     try {
@@ -289,7 +292,29 @@
   }
 
   function parseGuard(context) {
-    return guardStore.read(context);
+    const exact = guardStore.read(context);
+    if (exact) return exact;
+    if (context.scheduleId && !context.applicationId) return null;
+
+    const jobGuard = guardStore.readForJob?.(context);
+    if (!jobGuard) return null;
+    if (
+      context.applicationId &&
+      jobGuard.applicationId &&
+      context.applicationId !== jobGuard.applicationId
+    ) {
+      return null;
+    }
+    return jobGuard;
+  }
+
+  function hydrateContextFromGuard(context, guard) {
+    if (!context || !guard) return context;
+    if (!context.scheduleId && guard.scheduleId) context.scheduleId = guard.scheduleId;
+    if (!context.applicationId && guard.applicationId) context.applicationId = guard.applicationId;
+    if (!context.country && guard.country) context.country = guard.country;
+    if (!context.locale && guard.locale) context.locale = guard.locale;
+    return context;
   }
 
   function preservedGuardFields(context, extras = {}) {
@@ -316,6 +341,16 @@
 
   function isTerminalSuccessStage(stage) {
     return DIRECT_APPLICATION.TERMINAL_SUCCESS_STAGES.includes(stage);
+  }
+
+  function isStaleFailureStageAfterSuccess(stage) {
+    return [
+      DIRECT_APPLICATION.STAGES.APPLICATION_CREATED_WITHOUT_SCHEDULE,
+      DIRECT_APPLICATION.STAGES.SCHEDULE_UNAVAILABLE,
+      DIRECT_APPLICATION.STAGES.CAPTCHA_FAILED,
+      DIRECT_APPLICATION.STAGES.RESERVATION_VERIFICATION_FAILED,
+      DIRECT_APPLICATION.STAGES.FAILED,
+    ].includes(stage);
   }
 
   function shouldSuppressUiFallback(stage) {
@@ -421,6 +456,104 @@
     removeSessionKey(BOOKING_CONFIRMED_TOAST_SESSION_KEY);
   }
 
+  function formOpenedNotificationKey(context = {}, mode = '') {
+    return [
+      DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
+      'form-opened-notification',
+      mode || '',
+      context.jobId || '',
+      context.scheduleId || '',
+      context.applicationId || '',
+    ].join('::');
+  }
+
+  function claimFormOpenedNotification(context = {}, mode = '') {
+    if (!context.applicationId || !context.jobId) return false;
+    const key = formOpenedNotificationKey(context, mode);
+    const existing = readSessionJson(key);
+    if (Number(existing?.expiresAt || 0) > Date.now()) return false;
+    writeSessionJson(key, {
+      mode: mode || null,
+      jobId: context.jobId,
+      scheduleId: context.scheduleId || null,
+      applicationId: context.applicationId,
+      expiresAt: Date.now() + FORM_OPENED_NOTIFICATION_TTL_MS,
+    });
+    return true;
+  }
+
+  function successHandoffNavigationKey(context = {}, applicationId = null) {
+    return [
+      DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
+      'success-handoff-navigation',
+      context.jobId || '',
+      context.scheduleId || '',
+      applicationId || context.applicationId || '',
+    ].join('::');
+  }
+
+  function claimSuccessHandoffNavigation(context = {}, applicationId = null, redirectUrl = null) {
+    const effectiveApplicationId = applicationId || context.applicationId || null;
+    if (!context.jobId || !effectiveApplicationId) return true;
+    const key = successHandoffNavigationKey(context, effectiveApplicationId);
+    const existing = readSessionJson(key);
+    if (Number(existing?.expiresAt || 0) > Date.now()) return false;
+    writeSessionJson(key, {
+      jobId: context.jobId || null,
+      scheduleId: context.scheduleId || null,
+      applicationId: effectiveApplicationId,
+      redirectUrl: redirectUrl || null,
+      expiresAt: Date.now() + SUCCESS_HANDOFF_NAVIGATION_TTL_MS,
+    });
+    return true;
+  }
+
+  function terminalBookingSuccessKeys(context = {}, details = {}) {
+    const jobId = details.jobId || context.jobId || '';
+    const scheduleId = details.selectedScheduleId || details.scheduleId || context.scheduleId || '';
+    const applicationId = details.applicationId || context.applicationId || '';
+    if (!jobId || !scheduleId) return [];
+    const keyForApplication = appId => [
+      DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
+      'terminal-booking-success',
+      jobId,
+      scheduleId,
+      appId || '*',
+    ].join('::');
+    return Array.from(new Set([
+      applicationId ? keyForApplication(applicationId) : null,
+      keyForApplication('*'),
+    ].filter(Boolean)));
+  }
+
+  function markTerminalBookingSuccess(context = {}, details = {}) {
+    const keys = terminalBookingSuccessKeys(context, details);
+    if (!keys.length) return;
+    const payload = {
+      jobId: details.jobId || context.jobId || null,
+      scheduleId: details.selectedScheduleId || details.scheduleId || context.scheduleId || null,
+      applicationId: details.applicationId || context.applicationId || null,
+      currentState: details.currentState || null,
+      source: details.source || null,
+      expiresAt: Date.now() + TERMINAL_BOOKING_SUCCESS_TTL_MS,
+    };
+    keys.forEach(key => writeSessionJson(key, payload));
+  }
+
+  function hasTerminalBookingSuccess(context = {}, details = {}) {
+    const keys = terminalBookingSuccessKeys(context, details);
+    for (const key of keys) {
+      const existing = readSessionJson(key);
+      if (!existing) continue;
+      if (Number(existing.expiresAt || 0) <= Date.now()) {
+        removeSessionKey(key);
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
   function selectedScheduleIdFromRecord(record = {}) {
     return (
       record.confirmedScheduleId ||
@@ -438,7 +571,7 @@
     );
   }
 
-  function finishAlreadySelectedApplication(context, created = {}, options = {}) {
+  async function finishAlreadySelectedApplication(context, created = {}, options = {}) {
     if (!created?.applicationId || !isJobSelectedApplication(created)) return false;
 
     const confirmedScheduleId = selectedScheduleIdFromRecord(created) || context.scheduleId || null;
@@ -477,6 +610,43 @@
       redirectUrl: notificationRedirectUrl(handoff.redirectUrl),
       pageUrl: context.href,
     });
+    if (
+      DIRECT_APPLICATION.REDIRECT_AFTER_SUCCESS &&
+      handoff.routeName === DIRECT_APPLICATION.WORKFLOW_STEP_NAME
+    ) {
+      try {
+        const workflow = await updateWorkflowStep(created.applicationId);
+        persistResult(context, DIRECT_APPLICATION.STAGES.WORKFLOW_UPDATED, {
+          applicationId: created.applicationId,
+          currentState: workflow.currentState,
+          workflowStepName: workflow.workflowStepName,
+          workflowHttpStatus: workflow.responseStatus,
+          formHandoff: true,
+          resumedFromSelectedApplication: true,
+        });
+      } catch (workflowError) {
+        const normalizedWorkflowError = normalizeCaughtError(workflowError);
+        persistResult(context, DIRECT_APPLICATION.STAGES.WORKFLOW_UPDATE_FAILED, {
+          applicationId: created.applicationId,
+          currentState: created.currentState || created.raw?.currentState || 'JOB_SELECTED',
+          errorCode: normalizedWorkflowError.errorCode,
+          errorMessage: normalizedWorkflowError.errorMessage,
+          errorClassification: normalizedWorkflowError.classification,
+          httpStatus: normalizedWorkflowError.httpStatus,
+          formHandoff: true,
+          resumedFromSelectedApplication: true,
+        });
+        log.debug('workflow step update failed before existing application form handoff', {
+          jobId: context.jobId,
+          scheduleId: confirmedScheduleId || context.scheduleId || null,
+          applicationId: created.applicationId,
+          errorCode: normalizedWorkflowError.errorCode,
+          errorMessage: normalizedWorkflowError.errorMessage,
+          errorClassification: normalizedWorkflowError.classification,
+          httpStatus: normalizedWorkflowError.httpStatus,
+        });
+      }
+    }
     scheduleSuccessHandoff(context, created.applicationId, {
       handoff,
       scheduleId: confirmedScheduleId,
@@ -507,12 +677,37 @@
       [stages.WORKFLOW_WS_COMPLETED]: 'workflow websocket completed',
       [stages.WORKFLOW_WS_SKIPPED]: 'workflow websocket skipped',
       [stages.WORKFLOW_WS_FAILED]: 'workflow websocket failed',
+      [stages.WORKFLOW_UPDATED]: 'workflow step updated',
+      [stages.WORKFLOW_UPDATE_FAILED]: 'workflow step update failed',
       [stages.FAILED]: 'direct booking failed',
     };
     return messages[stage] || 'direct booking stage updated';
   }
 
   function persistResult(context, stage, metadata = {}) {
+    if (
+      isStaleFailureStageAfterSuccess(stage) &&
+      hasTerminalBookingSuccess(context, metadata)
+    ) {
+      log.warn('stale failure stage suppressed because this application is already booked', {
+        stage,
+        jobId: context.jobId,
+        scheduleId: metadata.selectedScheduleId || metadata.scheduleId || context.scheduleId || null,
+        applicationId: metadata.applicationId || context.applicationId || null,
+        errorCode: metadata.errorCode || null,
+        errorClassification: metadata.errorClassification || null,
+      });
+      const existing = parseGuard(context);
+      return {
+        stage: existing?.stage || DIRECT_APPLICATION.STAGES.JOB_CONFIRMED,
+        jobId: context.jobId || null,
+        scheduleId: context.scheduleId || null,
+        applicationId: metadata.applicationId || context.applicationId || existing?.applicationId || null,
+        suppressedAfterTerminalSuccess: true,
+        ...metadata,
+      };
+    }
+
     const preserved = preservedGuardFields(context, metadata);
     const result = {
       stage,
@@ -522,7 +717,7 @@
       locale: context.locale || null,
       clientEmail: metadata.clientEmail || context.clientEmail || null,
       pageUrl: context.href || window.location.href,
-      updatedAt: new Date().toISOString(),
+      updatedAt: root.AMZ_TIME?.nowIstIso?.() || new Date().toISOString(),
       ...preserved,
       ...metadata,
     };
@@ -568,34 +763,29 @@
 
     writeGuard(context, stage, metadata);
     updateAttemptLockForStage(context, stage, result);
+    if (stage === DIRECT_APPLICATION.STAGES.JOB_CONFIRMED) {
+      markTerminalBookingSuccess(context, result);
+    }
     return result;
   }
 
   function emitNotification(eventName, payload = {}, options = {}) {
-    const localRecorder = root.AMZ_LOCAL_BOOKING_EVENTS?.record;
-    if (typeof localRecorder === 'function') {
-      try {
-        localRecorder(eventName, payload, options);
-      } catch (error) {
-        log.debug('local booking event recorder failed', {
+    if (!root.AMZ_NOTIFICATIONS?.emit) return Promise.resolve(null);
+    try {
+      return root.AMZ_NOTIFICATIONS.emit(eventName, payload, options).catch(error => {
+        log.debug('notification delivery skipped after emit failure', {
           eventName,
           error: error?.message || String(error),
         });
-      }
+        return null;
+      });
+    } catch (error) {
+      log.debug('notification emit failed synchronously', {
+        eventName,
+        error: error?.message || String(error),
+      });
+      return Promise.resolve(null);
     }
-    log.debug('local booking event recorded', {
-      eventName,
-      jobId: payload.jobId || null,
-      scheduleId: payload.scheduleId || null,
-      applicationId: payload.applicationId || null,
-      source: options.source || payload.source || null,
-    });
-    return Promise.resolve({
-      ok: true,
-      localOnly: true,
-      eventName,
-      payload,
-    });
   }
 
   function playBookingTerminalAlert(eventName) {
@@ -613,11 +803,45 @@
     });
   }
 
+  function currentNotificationMode() {
+    return directApplicationMode.isEnabled() ? 'direct' : 'manual';
+  }
+
   function notify(eventName, details = {}) {
+    const pageContext = currentContext();
+    const notificationContext = {
+      ...pageContext,
+      jobId: details.jobId || pageContext.jobId || null,
+      scheduleId: details.selectedScheduleId || details.scheduleId || pageContext.scheduleId || null,
+      applicationId: details.applicationId || pageContext.applicationId || null,
+    };
+    if (
+      eventName === NOTIFICATIONS.EVENTS.BOOKING_FAILED &&
+      hasTerminalBookingSuccess(notificationContext, details)
+    ) {
+      log.warn('stale failure notification suppressed because this application is already booked', {
+        jobId: notificationContext.jobId,
+        scheduleId: notificationContext.scheduleId,
+        applicationId: notificationContext.applicationId,
+        errorCode: details.errorCode || null,
+        errorClassification: details.errorClassification || null,
+      });
+      return Promise.resolve({ ok: true, skipped: 'terminal-success-recorded' });
+    }
+    if (
+      eventName === NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED ||
+      eventName === NOTIFICATIONS.EVENTS.FORM_OPENED
+    ) {
+      markTerminalBookingSuccess(notificationContext, {
+        ...details,
+        source: eventName,
+      });
+    }
     playBookingTerminalAlert(eventName);
     return emitNotification(eventName, {
       ...details,
       clientEmail: details.clientEmail || activeAttemptClientEmail || null,
+      mode: details.mode || currentNotificationMode(),
       source: details.source || eventName,
       message: details.message || details.errorMessage || null,
       dedupeKey: details.observabilityKey || details.dedupeKey || null,
@@ -628,6 +852,19 @@
 
   function finalizeObservabilityOutcome(context, outcome, extras = {}) {
     if (!observability?.loadPendingTrace || !observability?.finalizeAndFlush) return;
+    if (outcome === 'BOOKED') {
+      markTerminalBookingSuccess(context, extras);
+    } else if (hasTerminalBookingSuccess(context, extras)) {
+      log.warn('stale observability outcome suppressed because this application is already booked', {
+        outcome,
+        jobId: context.jobId,
+        scheduleId: extras.confirmedScheduleId || extras.scheduleId || context.scheduleId || null,
+        applicationId: extras.applicationId || context.applicationId || null,
+        errorCode: extras.errorCode || null,
+        errorClassification: extras.errorClassification || null,
+      });
+      return;
+    }
     void observability.loadPendingTrace(context).then(trace => {
       if (!trace) return null;
       return observability.finalizeAndFlush(trace, outcome, extras, context);
@@ -1650,12 +1887,43 @@
     });
   }
 
+  async function requestApplicationVerification(applicationId) {
+    const paths = [
+      {
+        path: DIRECT_APPLICATION.API_PATHS.APPLICATION_DETAILS,
+        operation: 'application-details-verification',
+        source: 'application-details',
+      },
+      {
+        path: DIRECT_APPLICATION.API_PATHS.RESERVED_APPLICATION,
+        operation: 'reservation-verification',
+        source: 'reserved-application',
+      },
+    ].filter(entry => entry.path);
+
+    let lastResult = null;
+    for (const entry of paths) {
+      const url = apiUrlWithSuffix(entry.path, applicationId);
+      const result = await requestJsonAbsolute(url, {
+        method: 'GET',
+        headers: DIRECT_APPLICATION.REQUEST_HEADERS.RESERVED_APPLICATION,
+      }, { operation: entry.operation });
+      result.verificationSource = entry.source;
+      lastResult = result;
+      if (
+        result.response.ok &&
+        !result.data?.errorCode &&
+        !result.data?.error &&
+        !result.data?.errorMessage
+      ) {
+        return result;
+      }
+    }
+    return lastResult;
+  }
+
   async function verifyReservation(context, applicationId, options = {}) {
-    const url = apiUrlWithSuffix(DIRECT_APPLICATION.API_PATHS.RESERVED_APPLICATION, applicationId);
-    const result = await requestJsonAbsolute(url, {
-      method: 'GET',
-      headers: DIRECT_APPLICATION.REQUEST_HEADERS.RESERVED_APPLICATION,
-    }, { operation: 'reservation-verification' });
+    const result = await requestApplicationVerification(applicationId);
 
     if (!result.response.ok || result.data?.errorCode || result.data?.error || result.data?.errorMessage) {
       return {
@@ -1680,6 +1948,7 @@
       reservedScheduleId,
       scheduleMatched,
       verificationMode: options.requireScheduleMatch === true ? 'strict-schedule' : 'soft-state',
+      verificationSource: result.verificationSource || null,
       workflowStepName: result.data?.workflowStepName || null,
       currentState: result.data?.currentState || null,
       softReserveExpirationTimestamp:
@@ -1688,15 +1957,98 @@
     };
   }
 
+  function isSuccessfulHttpStatus(value) {
+    const status = Number(value);
+    return Number.isFinite(status) && status >= 200 && status < 300;
+  }
+
+  function provisionalConfirmCanContinue(context, confirmed = {}) {
+    return Boolean(
+      context?.scheduleId &&
+      confirmed?.provisional &&
+      isSuccessfulHttpStatus(confirmed.responseStatus)
+    );
+  }
+
+  function selectedScheduleForSuccess(context, confirmed = {}, verification = null) {
+    return (
+      confirmed?.confirmedScheduleId ||
+      verification?.reservedScheduleId ||
+      verification?.raw?.jobScheduleSelected?.scheduleId ||
+      context?.scheduleId ||
+      null
+    );
+  }
+
   async function verifyReservationBeforeSuccess(context, created, confirmed) {
     if (!DIRECT_APPLICATION.RESERVATION_VERIFY_BEFORE_SUCCESS && !confirmed?.provisional) {
       return null;
     }
 
-    const verification = await verifyReservation(context, created.applicationId, {
-      requireScheduleMatch: Boolean(confirmed?.provisional),
-    });
+    let verification;
+    try {
+      verification = await verifyReservation(context, created.applicationId, {
+        requireScheduleMatch: Boolean(confirmed?.provisional),
+      });
+    } catch (verificationError) {
+      if (!provisionalConfirmCanContinue(context, confirmed)) {
+        throw verificationError;
+      }
+      const normalizedVerificationError = normalizeCaughtError(verificationError);
+      persistResult(context, DIRECT_APPLICATION.STAGES.RESERVATION_VERIFICATION_FAILED, {
+        applicationId: created.applicationId,
+        candidateId: created.candidateId || null,
+        currentState: confirmed.currentState || 'JOB_SELECTED',
+        reservedScheduleId: context.scheduleId || null,
+        confirmHttpStatus: confirmed.responseStatus || null,
+        errorCode: normalizedVerificationError.errorCode,
+        errorMessage:
+          normalizedVerificationError.errorMessage ||
+          'Reservation verification failed after successful job-confirm.',
+        errorClassification: normalizedVerificationError.classification,
+        httpStatus: normalizedVerificationError.httpStatus,
+        fallbackAllowed: false,
+        nonBlockingProvisional: true,
+        provisionalConfirm: true,
+      });
+      return {
+        verified: false,
+        currentState: 'JOB_SELECTED',
+        reservedScheduleId: context.scheduleId || null,
+        provisionalAccepted: true,
+        errorCode: normalizedVerificationError.errorCode,
+        errorMessage: normalizedVerificationError.errorMessage,
+      };
+    }
     if (!verification.verified) {
+      if (provisionalConfirmCanContinue(context, confirmed)) {
+        persistResult(context, DIRECT_APPLICATION.STAGES.RESERVATION_VERIFICATION_FAILED, {
+          applicationId: created.applicationId,
+          candidateId: created.candidateId || null,
+          currentState: verification.currentState || confirmed.currentState || 'JOB_SELECTED',
+          reservedScheduleId: verification.reservedScheduleId || context.scheduleId || null,
+          confirmHttpStatus: confirmed.responseStatus || null,
+          reservationHttpStatus: verification.httpStatus || null,
+          reservationVerificationSource: verification.verificationSource || null,
+          errorCode: verification.errorCode || null,
+          errorMessage:
+            verification.errorMessage ||
+            'Reserved application did not contain the selected schedule yet.',
+          errorClassification:
+            DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
+          fallbackAllowed: false,
+          nonBlockingProvisional: true,
+          provisionalConfirm: true,
+          verificationMode: verification.verificationMode || null,
+        });
+        return {
+          ...verification,
+          verified: false,
+          currentState: 'JOB_SELECTED',
+          reservedScheduleId: verification.reservedScheduleId || context.scheduleId || null,
+          provisionalAccepted: true,
+        };
+      }
       throw new DirectApplicationError('Reservation verification did not confirm selected schedule after job-confirm.', {
         classification: DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
         httpStatus: verification.httpStatus || null,
@@ -1721,6 +2073,7 @@
         verification.softReserveExpirationTimestamp ||
         confirmed.softReserveExpirationTimestamp,
       reservationHttpStatus: verification.httpStatus,
+      reservationVerificationSource: verification.verificationSource || null,
       provisionalConfirm: Boolean(confirmed?.provisional),
     });
     return verification;
@@ -2140,10 +2493,41 @@
       : new URLSearchParams();
   }
 
+  function applicationCountryPathForContext(context = {}, parsed = null) {
+    const country = String(context.country || '').trim().toLowerCase();
+    const locale = String(context.locale || '').trim().toLowerCase();
+    const hostname = String(parsed?.hostname || '').trim().toLowerCase();
+    const configs = Object.values(AMAZON.COUNTRY_CONFIGS || {});
+    const config = configs.find(item => {
+      if (!item) return false;
+      return (
+        hostname === String(item.domain || '').toLowerCase() ||
+        country === String(item.applicationCountryPath || '').toLowerCase() ||
+        country === String(item.countryCode || '').toLowerCase() ||
+        country === String(item.country || '').toLowerCase() ||
+        locale === String(item.locale || '').toLowerCase()
+      );
+    }) || AMAZON.COUNTRY_CONFIG;
+    return String(config?.applicationCountryPath || context.country || '').trim().toLowerCase();
+  }
+
+  function normalizeApplicationRoutePath(parsed, context = {}) {
+    if (!parsed) return;
+    const pathname = parsed.pathname || '';
+    const normalizedPathname = pathname.endsWith('/') ? pathname : pathname + '/';
+    if ((AMAZON.APPLICATION_PATH_SEGMENTS || []).includes(normalizedPathname)) return;
+    if (pathname !== '/application' && pathname !== '/application/') return;
+
+    const countryPath = applicationCountryPathForContext(context, parsed);
+    if (!countryPath) return;
+    parsed.pathname = '/application/' + countryPath + '/';
+  }
+
   function buildApplicationRouteHandoffUrl(context, routeName, options = {}) {
     const includeScheduleId = options.includeScheduleId === true;
     const applicationId = options.applicationId || null;
     const parsed = new URL(context.href || window.location.href);
+    normalizeApplicationRoutePath(parsed, context);
     const mergedParams = new URLSearchParams();
     const copyParam = (key, value) => {
       if (!key || value === undefined || value === null || value === '') return;
@@ -2151,20 +2535,25 @@
       mergedParams.set(key, value);
     };
 
+    const country = applicationCountryPathForContext(context, parsed);
+    const locale = context.locale || AMAZON.COUNTRY_CONFIG?.locale || null;
     parsed.searchParams.forEach((value, key) => copyParam(key, value));
     hashSearchParams(parsed).forEach((value, key) => copyParam(key, value));
-    copyParam('country', context.country || AMAZON.COUNTRY_CONFIG?.code || null);
+    copyParam('country', country || null);
     copyParam('locale', context.locale || AMAZON.COUNTRY_CONFIG?.locale || null);
     copyParam('jobId', context.jobId || null);
     copyParam('applicationId', applicationId || null);
     if (includeScheduleId) copyParam('scheduleId', context.scheduleId || null);
 
+    if (country) parsed.searchParams.set('country', country);
+    if (locale) parsed.searchParams.set('locale', locale);
+    if (context.jobId) parsed.searchParams.set('jobId', context.jobId);
+    if (applicationId) parsed.searchParams.set('applicationId', applicationId);
     if (includeScheduleId && context.scheduleId) {
       parsed.searchParams.set('scheduleId', context.scheduleId);
     } else {
       parsed.searchParams.delete('scheduleId');
     }
-    if (applicationId) parsed.searchParams.set('applicationId', applicationId);
     parsed.hash = '#/' + routeName + '?' + mergedParams.toString();
     return parsed.toString();
   }
@@ -2215,27 +2604,29 @@
       ...context,
       scheduleId: options.scheduleId || context.scheduleId || null,
     };
-    const useConsentHandoff = Boolean(applicationId);
-    const redirectUrl = useConsentHandoff
-      ? buildConsentHandoffUrl(handoffContext, applicationId, {
+    const useApplicationHandoff = Boolean(applicationId);
+    const routeName = handoffContext.scheduleId
+      ? DIRECT_APPLICATION.WORKFLOW_STEP_NAME
+      : 'consent';
+    const redirectUrl = useApplicationHandoff
+      ? buildApplicationRouteHandoffUrl(handoffContext, routeName, {
+        applicationId,
         includeScheduleId: Boolean(handoffContext.scheduleId),
       })
       : AMAZON.URLS.JOB_SEARCH;
     return {
       context: handoffContext,
       redirectUrl,
-      useConsentHandoff,
-      redirectDelay: useConsentHandoff
+      routeName: useApplicationHandoff ? routeName : null,
+      useConsentHandoff: useApplicationHandoff && routeName === 'consent',
+      useApplicationHandoff,
+      redirectDelay: useApplicationHandoff
         ? DIRECT_APPLICATION.CONSENT_REDIRECT_DELAY_MS
         : DIRECT_APPLICATION.UNAVAILABLE_JOB_SEARCH_REDIRECT_DELAY_MS,
     };
   }
 
   function scheduleConsentHandoff(context, applicationId, options = {}) {
-    void storage.removeLocal(STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING).catch(error => {
-      log.error('Unable to clear Select shifts handoff before consent redirect:', error);
-    });
-
     const markSelectedScheduleUnavailable = options.markSelectedScheduleUnavailable !== false;
     if (markSelectedScheduleUnavailable && context.scheduleId) {
       try {
@@ -2390,7 +2781,7 @@
     scheduleVerification = null
   ) {
     const created = fallback.created;
-    if (finishAlreadySelectedApplication(context, created, {
+    if (await finishAlreadySelectedApplication(context, created, {
       reason: fallback.reusedExistingApplication
         ? 'fallback-reused-existing-job-selected'
         : 'fallback-create-returned-job-selected',
@@ -2436,9 +2827,13 @@
       errorCode: 'SELECTED_SCHEDULE_NOT_AVAILABLE',
       errorClassification: DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
     });
-    const redirectUrl = buildConsentHandoffUrl(context, created.applicationId, {
-      includeScheduleId: false,
-    });
+    const redirectUrl = AMAZON.URLS.JOB_SEARCH;
+    const unavailableFailure = {
+      classification: DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
+      errorCode: 'SELECTED_SCHEDULE_NOT_AVAILABLE',
+      errorMessage: 'Selected schedule was not available before create application.',
+      httpStatus: scheduleVerification?.httpStatus || null,
+    };
     notify(NOTIFICATIONS.EVENTS.BOOKING_FAILED, {
       jobId: context.jobId,
       scheduleId: context.scheduleId,
@@ -2449,14 +2844,14 @@
       errorClassification:
         DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
       message:
-        'Application was created, but the selected schedule was not booked. Moving to consent.',
+        'Application was created, but the selected schedule was not booked. Returning to job search.',
       redirectUrl: notificationRedirectUrl(redirectUrl),
       pageUrl: context.href,
     });
-    scheduleConsentHandoff(context, created.applicationId);
+    scheduleFailureHandoff(context, unavailableFailure, created.applicationId);
   }
 
-  function schedulePostCreateConfirmFailureHandoff(context, created, normalized) {
+  async function schedulePostCreateConfirmFailureHandoff(context, created, normalized) {
     if (
       DIRECT_APPLICATION.POST_CREATE_CONFIRM_FAILURE_CONSENT_HANDOFF_ENABLED === false ||
       !created?.applicationId ||
@@ -2467,10 +2862,20 @@
       return false;
     }
 
-    if (finishAlreadySelectedApplication(context, created, {
+    if (await finishAlreadySelectedApplication(context, created, {
       reason: 'post-create-confirm-failed-existing-job-selected',
       message: 'Booking already confirmed on Amazon for this application.',
     })) {
+      return true;
+    }
+    if (hasTerminalBookingSuccess(context, { applicationId: created.applicationId })) {
+      log.warn('post-create confirm failure suppressed because this application is already booked', {
+        jobId: context.jobId,
+        scheduleId: context.scheduleId,
+        applicationId: created.applicationId,
+        errorCode: normalized.errorCode || null,
+        errorClassification: normalized.classification || null,
+      });
       return true;
     }
 
@@ -2498,9 +2903,7 @@
       errorClassification: normalized.classification,
       confirmHttpStatus: normalized.httpStatus || null,
     });
-    const redirectUrl = buildConsentHandoffUrl(context, created.applicationId, {
-      includeScheduleId: false,
-    });
+    const redirectUrl = AMAZON.URLS.JOB_SEARCH;
     notify(NOTIFICATIONS.EVENTS.BOOKING_FAILED, {
       jobId: context.jobId,
       scheduleId: context.scheduleId,
@@ -2513,31 +2916,37 @@
       errorClassification: normalized.classification,
       httpStatus: normalized.httpStatus || null,
       message:
-        'Application was created, but the selected schedule could not be confirmed. Moving to consent.',
+        'Application was created, but the selected schedule could not be confirmed. Returning to job search.',
       redirectUrl: notificationRedirectUrl(redirectUrl),
       pageUrl: context.href,
     });
-    scheduleConsentHandoff(context, created.applicationId, {
-      markSelectedScheduleUnavailable: false,
-      logMessage: 'official post-create confirm failure consent redirect scheduled',
-    });
+    scheduleFailureHandoff(context, normalized, created.applicationId);
     return true;
   }
 
   function scheduleSuccessHandoff(context, applicationId, options = {}) {
     const handoff = options.handoff || successHandoffInfo(context, applicationId, options);
     const handoffContext = handoff.context || context;
-    if (handoff.useConsentHandoff) {
-      void storage.removeLocal(STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING).catch(error => {
-        log.error('Unable to clear Select shifts handoff:', error);
-      });
-    }
     if (!DIRECT_APPLICATION.REDIRECT_AFTER_SUCCESS) return handoff;
+    if (!claimSuccessHandoffNavigation(handoffContext, applicationId, handoff.redirectUrl)) {
+      log.debug('selected-schedule application form redirect already scheduled; suppressing duplicate handoff', {
+        redirectUrl: handoff.redirectUrl,
+        routeName: handoff.routeName || null,
+        jobId: handoffContext.jobId,
+        scheduleId: handoffContext.scheduleId,
+        applicationId,
+      });
+      return handoff;
+    }
 
-    log.info(handoff.useConsentHandoff
-      ? 'official selected-schedule consent redirect scheduled'
-      : 'direct success redirect scheduled', {
+    const handoffMessage = handoff.routeName === DIRECT_APPLICATION.WORKFLOW_STEP_NAME
+      ? 'official selected-schedule application form redirect scheduled'
+      : handoff.useConsentHandoff
+        ? 'official selected-schedule consent redirect scheduled'
+        : 'direct success redirect scheduled';
+    log.info(handoffMessage, {
       redirectUrl: handoff.redirectUrl,
+      routeName: handoff.routeName || null,
       jobId: handoffContext.jobId,
       scheduleId: handoffContext.scheduleId,
       applicationId,
@@ -2550,9 +2959,16 @@
   }
 
   function scheduleFailureHandoff(context, normalized, applicationId) {
-    void storage.removeLocal(STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING).catch(error => {
-      log.error('Unable to clear Select shifts handoff after direct failure:', error);
-    });
+    if (hasTerminalBookingSuccess(context, { applicationId })) {
+      log.warn('schedule failure handoff suppressed because this application is already booked', {
+        jobId: context.jobId,
+        scheduleId: context.scheduleId,
+        applicationId,
+        errorCode: normalized.errorCode,
+        errorClassification: normalized.classification,
+      });
+      return;
+    }
 
     const isUnavailableOrReservationFailure =
       normalized.classification ===
@@ -2623,6 +3039,7 @@
             verification.softReserveExpirationTimestamp ||
             confirmed.softReserveExpirationTimestamp,
           reservationHttpStatus: verification.httpStatus,
+          reservationVerificationSource: verification.verificationSource || null,
         });
       } else {
         log.debug('reservation verification did not confirm selected schedule after job-confirm success', {
@@ -2681,6 +3098,153 @@
     }
   }
 
+  async function prepareSelectedScheduleFormHandoff(
+    context,
+    created,
+    confirmed,
+    knownVerification,
+    scheduleVerification,
+    scheduleDetailPromise,
+    jobDetail,
+    jobDetailPromise
+  ) {
+    let verification = knownVerification;
+    if (!verification) {
+      try {
+        verification = await verifyReservation(context, created.applicationId);
+      } catch (verificationError) {
+        const normalizedVerificationError = normalizeCaughtError(verificationError);
+        verification = {
+          verified: false,
+          httpStatus: normalizedVerificationError.httpStatus || null,
+          errorCode: normalizedVerificationError.errorCode || null,
+          errorMessage:
+            normalizedVerificationError.errorMessage ||
+            'Application details verification failed before form handoff.',
+          currentState: confirmed.currentState || null,
+          reservedScheduleId: null,
+          verificationMode: 'form-handoff-exception',
+          verificationSource: null,
+          raw: null,
+        };
+      }
+    }
+
+    if (verification.verified) {
+      persistResult(context, DIRECT_APPLICATION.STAGES.RESERVATION_VERIFIED, {
+        applicationId: created.applicationId,
+        candidateId: created.candidateId || null,
+        currentState: verification.currentState || confirmed.currentState,
+        reservedScheduleId: verification.reservedScheduleId,
+        softReserveExpirationTimestamp:
+          verification.softReserveExpirationTimestamp ||
+          confirmed.softReserveExpirationTimestamp,
+        reservationHttpStatus: verification.httpStatus,
+        reservationVerificationSource: verification.verificationSource || null,
+        formHandoff: true,
+      });
+    } else {
+      persistResult(context, DIRECT_APPLICATION.STAGES.RESERVATION_VERIFICATION_FAILED, {
+        applicationId: created.applicationId,
+        candidateId: created.candidateId || null,
+        currentState: verification.currentState || confirmed.currentState || 'JOB_SELECTED',
+        reservedScheduleId: verification.reservedScheduleId || context.scheduleId || null,
+        reservationHttpStatus: verification.httpStatus || null,
+        reservationVerificationSource: verification.verificationSource || null,
+        errorCode: verification.errorCode || null,
+        errorMessage:
+          verification.errorMessage ||
+          'Application details did not contain the selected schedule before form handoff.',
+        errorClassification:
+          DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
+        fallbackAllowed: false,
+        verificationMode: verification.verificationMode || null,
+        formHandoff: true,
+        nonBlockingFormHandoff: true,
+      });
+    }
+
+    const [workflowScheduleVerification, workflowJobDetail] = await Promise.all([
+      scheduleVerification || waitForWorkflowPrefetch(scheduleDetailPromise),
+      jobDetail || waitForWorkflowPrefetch(jobDetailPromise),
+    ]);
+    await runWorkflowWebSocketObservability(
+      context,
+      created,
+      confirmed,
+      workflowScheduleVerification,
+      workflowJobDetail
+    );
+
+    let workflow = null;
+    try {
+      workflow = await updateWorkflowStep(created.applicationId);
+      persistResult(context, DIRECT_APPLICATION.STAGES.WORKFLOW_UPDATED, {
+        applicationId: created.applicationId,
+        currentState: workflow.currentState,
+        workflowStepName: workflow.workflowStepName,
+        workflowHttpStatus: workflow.responseStatus,
+        formHandoff: true,
+      });
+    } catch (workflowError) {
+      const normalizedWorkflowError = normalizeCaughtError(workflowError);
+      persistResult(context, DIRECT_APPLICATION.STAGES.WORKFLOW_UPDATE_FAILED, {
+        applicationId: created.applicationId,
+        currentState: verification.currentState || confirmed.currentState,
+        errorCode: normalizedWorkflowError.errorCode,
+        errorMessage: normalizedWorkflowError.errorMessage,
+        errorClassification: normalizedWorkflowError.classification,
+        httpStatus: normalizedWorkflowError.httpStatus,
+        formHandoff: true,
+      });
+      throw workflowError;
+    }
+
+    try {
+      const postWorkflowVerification = await verifyReservation(context, created.applicationId);
+      if (postWorkflowVerification.verified) {
+        persistResult(context, DIRECT_APPLICATION.STAGES.RESERVATION_VERIFIED, {
+          applicationId: created.applicationId,
+          candidateId: created.candidateId || null,
+          currentState: postWorkflowVerification.currentState || workflow.currentState || confirmed.currentState,
+          reservedScheduleId: postWorkflowVerification.reservedScheduleId,
+          softReserveExpirationTimestamp:
+            postWorkflowVerification.softReserveExpirationTimestamp ||
+            verification.softReserveExpirationTimestamp ||
+            confirmed.softReserveExpirationTimestamp,
+          reservationHttpStatus: postWorkflowVerification.httpStatus,
+          reservationVerificationSource: postWorkflowVerification.verificationSource || null,
+          workflowStepName: getWorkflowStepName(postWorkflowVerification, workflow, verification),
+          formHandoff: true,
+          postWorkflowUpdate: true,
+        });
+        return postWorkflowVerification;
+      }
+    } catch (verificationError) {
+      const normalizedVerificationError = normalizeCaughtError(verificationError);
+      log.debug('post-workflow application rehydrate failed before form handoff', {
+        jobId: context.jobId,
+        scheduleId: context.scheduleId,
+        applicationId: created.applicationId,
+        errorCode: normalizedVerificationError.errorCode,
+        errorMessage: normalizedVerificationError.errorMessage,
+        errorClassification: normalizedVerificationError.classification,
+        httpStatus: normalizedVerificationError.httpStatus,
+      });
+    }
+
+    return {
+      ...verification,
+      currentState: workflow.currentState || verification.currentState || confirmed.currentState || 'JOB_SELECTED',
+      workflowStepName:
+        workflow.workflowStepName ||
+        verification.workflowStepName ||
+        DIRECT_APPLICATION.WORKFLOW_STEP_NAME,
+      reservedScheduleId: verification.reservedScheduleId || context.scheduleId || null,
+      raw: workflow.raw || verification.raw,
+    };
+  }
+
   function runSuccessPostConfirmObservability(
     context,
     created,
@@ -2710,24 +3274,105 @@
   }
 
   async function handleApplicationFormOpened(context) {
+    const route = urls.getApplicationRouteName?.(context.href) || null;
+    const finalFormOpened = urls.isFinalApplicationFormPage?.(context.href) === true;
+    const manualMode = !directApplicationMode.isEnabled();
+    const mode = manualMode ? 'manual' : 'direct';
+    const claimedFinalFormOpened = finalFormOpened
+      ? claimFormOpenedNotification(context, mode)
+      : false;
+    if (finalFormOpened && !claimedFinalFormOpened) {
+      removeSessionKey(BOOKING_CONFIRMED_TOAST_SESSION_KEY);
+      return;
+    }
     log.info('application form opened; recording observability and clearing handoff state', {
       jobId: context.jobId,
       scheduleId: context.scheduleId,
       applicationId: context.applicationId || null,
+      route,
+      finalFormOpened,
+      mode,
       pageUrl: notificationRedirectUrl(context.href),
     });
-    try {
-      await observability?.recordApplicationFormOpened?.(context, {
-        route: urls.getApplicationRouteName?.(context.href) || null,
-        source: 'application-form-route',
-      });
-    } catch (error) {
-      log.debug('application form opened observability failed:', error?.message || String(error));
+    if (finalFormOpened) {
+      try {
+        const terminalFormOpened = manualMode || Boolean(context.scheduleId);
+        const recordFormOpened = observability?.recordApplicationFormOpened?.(context, {
+          route,
+          source: 'application-form-route',
+          terminal: terminalFormOpened,
+          outcome: terminalFormOpened ? 'BOOKED' : 'APPLICATION_CREATED',
+        });
+        if (recordFormOpened?.catch) {
+          void recordFormOpened.catch(error => {
+            log.debug('application form opened observability failed:', error?.message || String(error));
+          });
+        }
+      } catch (error) {
+        log.debug('application form opened observability failed:', error?.message || String(error));
+      }
     }
-    try {
-      await storage.removeLocal(STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING);
-    } catch (error) {
-      log.debug('unable to clear Select shifts handoff after form opened:', error?.message || String(error));
+    if (finalFormOpened && claimedFinalFormOpened) {
+      const formOpenedPayload = {
+        jobId: context.jobId,
+        scheduleId: context.scheduleId || null,
+        applicationId: context.applicationId || null,
+        currentState: 'APPLICATION_FORM_OPENED',
+        selectedScheduleId: context.scheduleId || null,
+        workflowStepName: route,
+        mode,
+        message: mode === 'manual'
+          ? 'Manual application form opened.'
+          : 'Direct application form opened.',
+        redirectUrl: notificationRedirectUrl(context.href),
+        pageUrl: context.href,
+        dedupeKey: [
+          'form-opened',
+          mode,
+          context.jobId || '',
+          context.scheduleId || '',
+          context.applicationId || '',
+        ].join('::'),
+      };
+      if (manualMode) {
+        notify(NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED, {
+          ...formOpenedPayload,
+          message: 'Booking confirmed after manual application form opened.',
+          dedupeKey: [
+            'manual-booked-form-opened',
+            context.jobId || '',
+            context.scheduleId || '',
+            context.applicationId || '',
+          ].join('::'),
+        });
+      }
+      notify(NOTIFICATIONS.EVENTS.FORM_OPENED, formOpenedPayload);
+      try {
+        const usage = await root.AMZ_PAYMENT_GATE?.consumeBookingCredit?.({
+          jobId: context.jobId || null,
+          scheduleId: context.scheduleId || context.applicationId || null,
+          metadata: {
+            source: 'application-form-opened',
+            route,
+            mode,
+            applicationId: context.applicationId || null,
+            pageUrl: context.href,
+          },
+        });
+        if (!usage?.ok) {
+          log.warn('booking credit deduction failed after application form opened', {
+            reason: usage?.reason || 'usage-denied',
+            jobId: context.jobId || null,
+            scheduleId: context.scheduleId || null,
+          });
+        }
+      } catch (error) {
+        log.warn('booking credit deduction failed after application form opened', {
+          message: error?.message || String(error),
+          jobId: context.jobId || null,
+          scheduleId: context.scheduleId || null,
+        });
+      }
     }
     removeSessionKey(BOOKING_CONFIRMED_TOAST_SESSION_KEY);
   }
@@ -2744,9 +3389,32 @@
     directApplicationMode.setEnabled(activeState[STORAGE_KEYS.USE_DIRECT_APPLICATION]);
     context.clientEmail = await resolveAttemptClientEmail();
     activeAttemptClientEmail = context.clientEmail || null;
+    const existingGuard = parseGuard(context);
+    hydrateContextFromGuard(context, existingGuard);
     if (activeState[STORAGE_KEYS.ACTIVE] !== true) {
       observability?.finalizePendingDeactivated?.(context, {
         source: 'application-route-inactive',
+        page_url: context.href,
+      });
+      return;
+    }
+
+    const paidGate = root.AMZ_PAYMENT_GATE?.requireAllowed
+      ? await root.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true })
+      : (typeof process !== 'undefined' && process.env?.NODE_ENV === 'test' ? { ok: true } : { ok: false });
+    if (!paidGate.ok) {
+      log.warn('direct booking blocked because paid license is not valid', {
+        reason: paidGate?.reason || 'license-denied',
+        jobId: context.jobId || null,
+        scheduleId: context.scheduleId || null,
+      });
+      root.AMZ_TOASTS?.showCreditsRequiredPopup?.({
+        jobId: context.jobId || null,
+        scheduleId: context.scheduleId || null,
+        reason: paidGate?.reason || 'credits-required',
+      });
+      observability?.finalizePendingDeactivated?.(context, {
+        source: 'paid-license-denied',
         page_url: context.href,
       });
       return;
@@ -2758,10 +3426,6 @@
     }
 
     showQueuedBookingConfirmedToast(context);
-
-    if (!context.scheduleId) return;
-
-    const existingGuard = parseGuard(context);
     if (existingGuard && isTerminalSuccessStage(existingGuard.stage)) {
       if (
         existingGuard.withoutSelectedSchedule ||
@@ -2773,6 +3437,8 @@
       }
       return;
     }
+
+    if (!context.scheduleId) return;
 
     if (!directApplicationMode.isEnabled()) {
       log.debug('direct application disabled by mode; native UI automation will handle create application', {
@@ -2955,7 +3621,7 @@
         ) {
           throw confirmError;
         }
-        if (schedulePostCreateConfirmFailureHandoff(context, created, normalizedConfirmError)) {
+        if (await schedulePostCreateConfirmFailureHandoff(context, created, normalizedConfirmError)) {
           return;
         }
         const fallback = await tryCreateWithoutScheduleFallback(
@@ -2992,30 +3658,38 @@
           verification.softReserveExpirationTimestamp ||
           confirmed.softReserveExpirationTimestamp;
       }
+      const successScheduleId = selectedScheduleForSuccess(context, confirmed, verification);
+      if (successScheduleId && (!confirmed.confirmedScheduleId || verification?.provisionalAccepted)) {
+        confirmed.confirmedScheduleId = successScheduleId;
+        confirmed.provisionalScheduleFallback = Boolean(confirmed.provisional);
+      }
+      if (successScheduleId && confirmed.provisional && confirmed.currentState !== 'JOB_SELECTED') {
+        confirmed.currentState = 'JOB_SELECTED';
+      }
       persistResult(context, DIRECT_APPLICATION.STAGES.JOB_CONFIRMED, {
         applicationId: created.applicationId,
         candidateId: created.candidateId,
         currentState: confirmed.currentState,
-        confirmedScheduleId: confirmed.confirmedScheduleId,
+        confirmedScheduleId: successScheduleId,
         softReserveExpirationTimestamp: confirmed.softReserveExpirationTimestamp,
         confirmHttpStatus: confirmed.responseStatus,
         provisionalConfirm: Boolean(confirmed.provisional),
+        provisionalScheduleFallback: Boolean(confirmed.provisionalScheduleFallback),
       });
       finalizeObservabilityOutcome(context, 'BOOKED', {
         detailedOutcome: 'JOB_CONFIRMED',
         applicationId: created.applicationId,
-        confirmedScheduleId: confirmed.confirmedScheduleId || context.scheduleId || null,
+        confirmedScheduleId: successScheduleId,
         confirmHttpStatus: confirmed.responseStatus || null,
       });
       queueBookingConfirmedToast(context, {
         applicationId: created.applicationId,
         currentState: confirmed.currentState,
-        selectedScheduleId: confirmed.confirmedScheduleId,
+        selectedScheduleId: successScheduleId,
         message: verification
           ? 'Booking confirmed after reservation verification.'
           : 'Booking confirmed after job-confirm.',
       });
-      const successScheduleId = confirmed.confirmedScheduleId || context.scheduleId;
       const handoff = successHandoffInfo(context, created.applicationId, {
         scheduleId: successScheduleId,
       });
@@ -3024,23 +3698,56 @@
         scheduleId: successScheduleId,
         applicationId: created.applicationId,
         currentState: confirmed.currentState,
-        selectedScheduleId: confirmed.confirmedScheduleId || null,
+        selectedScheduleId: successScheduleId,
         message: verification
           ? 'Booking confirmed after reservation verification.'
           : 'Booking confirmed after job-confirm.',
         redirectUrl: notificationRedirectUrl(handoff.redirectUrl),
         pageUrl: context.href,
       });
-      runSuccessPostConfirmObservability(
-        context,
-        created,
-        confirmed,
-        verification,
-        scheduleVerification,
-        scheduleDetailPromise,
-        jobDetail,
-        jobDetailPromise
-      );
+      let finalHandoffVerification = verification;
+      let formHandoffPrepared = false;
+      const shouldPrepareFormHandoff =
+        DIRECT_APPLICATION.REDIRECT_AFTER_SUCCESS &&
+        handoff.routeName === DIRECT_APPLICATION.WORKFLOW_STEP_NAME;
+      if (shouldPrepareFormHandoff) {
+        try {
+          finalHandoffVerification = await prepareSelectedScheduleFormHandoff(
+            context,
+            created,
+            confirmed,
+            verification,
+            scheduleVerification,
+            scheduleDetailPromise,
+            jobDetail,
+            jobDetailPromise
+          );
+          formHandoffPrepared = true;
+        } catch (handoffError) {
+          const normalizedHandoffError = normalizeCaughtError(handoffError);
+          log.warn('selected-schedule form handoff preparation failed; continuing with final route', {
+            jobId: context.jobId,
+            scheduleId: successScheduleId,
+            applicationId: created.applicationId,
+            errorCode: normalizedHandoffError.errorCode,
+            errorMessage: normalizedHandoffError.errorMessage,
+            errorClassification: normalizedHandoffError.classification,
+            httpStatus: normalizedHandoffError.httpStatus,
+          });
+        }
+      }
+      if (!formHandoffPrepared) {
+        runSuccessPostConfirmObservability(
+          context,
+          created,
+          confirmed,
+          finalHandoffVerification,
+          scheduleVerification,
+          scheduleDetailPromise,
+          jobDetail,
+          jobDetailPromise
+        );
+      }
       scheduleSuccessHandoff(context, created.applicationId, {
         handoff,
         scheduleId: successScheduleId,

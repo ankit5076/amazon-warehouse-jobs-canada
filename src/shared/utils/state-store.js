@@ -18,6 +18,7 @@
     STORAGE_KEYS.JOB_TYPE,
     STORAGE_KEYS.CITY_TAGS,
     STORAGE_KEYS.ACTIVE,
+    STORAGE_KEYS.SELECTED_CLIENT_ID,
     STORAGE_KEYS.AUTH_PROBE_STATUS,
     STORAGE_KEYS.FETCH_INTERVAL_VALUE,
     STORAGE_KEYS.FETCH_INTERVAL_UNIT,
@@ -50,6 +51,8 @@
     STORAGE_KEYS.JOB_TYPE,
     STORAGE_KEYS.ACTIVE,
     STORAGE_KEYS.CITY_TAGS,
+    STORAGE_KEYS.SELECTED_CLIENT_ID,
+    STORAGE_KEYS.SELECTED_CLIENT_LABEL,
     STORAGE_KEYS.FETCH_INTERVAL_VALUE,
     STORAGE_KEYS.FETCH_INTERVAL_UNIT,
     STORAGE_KEYS.FETCH_INTERVAL_MIN_MS,
@@ -73,10 +76,10 @@
   }
 
   async function hasSelectedClient() {
-    return true;
+    return hasClientId(await getSelectedClientId());
   }
 
-  async function setActive(active) {
+  async function setActive(active, options = {}) {
     const requestedActive = active === true;
     await storage.setLocal({ [STORAGE_KEYS.ACTIVE]: requestedActive });
     return requestedActive;
@@ -252,7 +255,7 @@
     const name = normalizeClientText(client?.name);
     const email = normalizeClientText(client?.emailid);
     const status = normalizeClientText(client?.status).toUpperCase();
-    const base = name || email || 'Amazon Shifts client';
+    const base = name || email || 'amazon-warehouse-ca client';
     return status ? `${base} (${status})` : base;
   }
 
@@ -370,19 +373,6 @@
     await storage.setLocal({ [STORAGE_KEYS.LAST_MATCHED_JOB]: value || null });
   }
 
-  async function getDirectSelectShiftsPending() {
-    const stored = await storage.getLocal(STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING);
-    return stored[STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING] || null;
-  }
-
-  async function setDirectSelectShiftsPending(value) {
-    await storage.setLocal({ [STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING]: value || null });
-  }
-
-  async function clearDirectSelectShiftsPending() {
-    await storage.removeLocal(STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING);
-  }
-
   async function getResetPreservedCredentials() {
     return storage.getLocal([
       STORAGE_KEYS.AMAZON_LOGIN_USERNAME,
@@ -421,9 +411,6 @@
     getJobSearchControls,
     getPageRefreshIntervalMs,
     setLastMatchedJob,
-    getDirectSelectShiftsPending,
-    setDirectSelectShiftsPending,
-    clearDirectSelectShiftsPending,
     getResetPreservedCredentials,
     resetLocal,
   });

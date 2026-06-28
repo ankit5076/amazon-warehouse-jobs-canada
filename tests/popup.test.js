@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { JSDOM } from "jsdom";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { loadSharedScripts, unloadSharedNamespaces } from "./_load.js";
 
 function tick() {
@@ -7,9 +9,7 @@ function tick() {
 }
 
 async function flushPopup() {
-    for (let index = 0; index < 10; index += 1) {
-        await tick();
-    }
+    for (let index = 0; index < 20; index += 1) await tick();
 }
 
 function installPopupDom() {
@@ -22,22 +22,31 @@ function installPopupDom() {
               <option value="debug">Debug</option>
               <option value="off">Off</option>
             </select>
-            <input id="activate" type="checkbox">
+            <div class="toggle-section">
+              <input id="activate" type="checkbox">
+            </div>
             <input id="use_direct_application" type="checkbox">
             <strong id="direct_application_mode_label"></strong>
-            <div class="field"><select id="city"></select></div>
-            <div class="field"><select id="distance"></select></div>
-            <select id="jobType" multiple></select>
-            <input id="fetch_interval_value" type="number">
-            <select id="fetch_interval_unit">
-              <option value="ms">Milliseconds</option>
-              <option value="s">Seconds</option>
-            </select>
-            <button id="add-all-cities" type="button"></button>
-            <button id="select-all-job-types" type="button"></button>
-            <form id="refresh_info"><button id="refresh_btn" type="submit">Refresh</button></form>
-            <form id="ais_visa_info"><button id="reset_info" type="submit">Reset</button></form>
-            <div class="tag-input-container">
+            <div class="credit-actions">
+              <button id="checkout_btn" data-plan="credits" type="button">Get 30 days</button>
+              <button id="checkout_pro_btn" data-plan="pro" type="button">Go Pro</button>
+              <small id="license-status"></small>
+            </div>
+            <div class="dropdowns-container" data-authenticated-section>
+              <div class="field"><select id="city"></select></div>
+              <div class="field"><select id="distance"></select></div>
+              <select id="jobType" multiple></select>
+              <input id="fetch_interval_value" type="number">
+              <select id="fetch_interval_unit">
+                <option value="ms">Milliseconds</option>
+                <option value="s">Seconds</option>
+              </select>
+              <button id="add-all-cities" type="button"></button>
+              <button id="select-all-job-types" type="button"></button>
+            </div>
+            <form id="refresh_info" data-authenticated-section><button id="refresh_btn" type="submit"></button></form>
+            <form id="ais_visa_info" data-authenticated-section><button id="reset_info" type="submit"></button></form>
+            <div class="tag-input-container" data-authenticated-section>
               <span id="city-scope-status"></span>
               <div id="tag-input-box"><input id="city-input"></div>
             </div>
@@ -63,6 +72,10 @@ function useLocalStore(initial = {}) {
             });
         } else if (typeof keys === "string") {
             if (Object.prototype.hasOwnProperty.call(store, keys)) result[keys] = store[keys];
+        } else if (keys && typeof keys === "object") {
+            Object.keys(keys).forEach(key => {
+                result[key] = Object.prototype.hasOwnProperty.call(store, key) ? store[key] : keys[key];
+            });
         } else {
             result = { ...store };
         }
@@ -87,121 +100,171 @@ function useLocalStore(initial = {}) {
     return store;
 }
 
-describe("local-only popup settings", () => {
+function loadPopupScripts() {
+    unloadSharedNamespaces([
+        "AMZ_CONSTANTS",
+        "AMZ_LOGGER",
+        "AMZ_TEXT",
+        "AMZ_STORAGE",
+        "AMZ_ACCOUNT",
+        "AMZ_CITY_TAGS",
+        "AMZ_INTERVALS",
+        "AMZ_RUNTIME_CONTROLS",
+        "AMZ_STATE",
+        "AMZ_MESSAGING",
+        "AMZ_LICENSE_API",
+        "AMZ_LICENSE_STATE",
+        "AMZ_PAYMENT_GATE",
+        "AMZ_API",
+        "AMZ_VALIDATION",
+        "AMZ_POPUP_TAGS",
+    ]);
+    loadSharedScripts([
+        "shared/constants.js",
+        "shared/utils/logger.js",
+        "shared/utils/text.js",
+        "shared/utils/storage.js",
+        "shared/utils/account.js",
+        "shared/utils/city-tags.js",
+        "shared/utils/intervals.js",
+        "shared/utils/runtime-controls.js",
+        "shared/utils/state-store.js",
+        "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
+        "shared/api-client.js",
+        "shared/validation.js",
+        "popup/tag-manager.js",
+        "popup/content.js",
+    ]);
+}
+
+describe("paid popup gate", () => {
     beforeEach(() => {
-        unloadSharedNamespaces([
-            "AMZ_CONSTANTS",
-            "AMZ_LOGGER",
-            "AMZ_TEXT",
-            "AMZ_STORAGE",
-            "AMZ_ACCOUNT",
-            "AMZ_CITY_TAGS",
-            "AMZ_INTERVALS",
-            "AMZ_RUNTIME_CONTROLS",
-            "AMZ_STATE",
-            "AMZ_POPUP_TAGS",
-        ]);
         installPopupDom();
-        loadSharedScripts([
-            "shared/constants.js",
-            "shared/utils/logger.js",
-            "shared/utils/text.js",
-            "shared/utils/storage.js",
-            "shared/utils/account.js",
-            "shared/utils/city-tags.js",
-            "shared/utils/intervals.js",
-            "shared/utils/runtime-controls.js",
-            "shared/utils/state-store.js",
-            "popup/tag-manager.js",
-        ]);
-        globalThis.chrome.runtime.getManifest = () => ({ version: "9.9.9" });
-        globalThis.chrome.tabs.query = vi.fn(() => Promise.resolve([{ id: 123 }]));
-        globalThis.chrome.tabs.sendMessage = vi.fn(() => Promise.resolve(true));
+        if (!globalThis.chrome) {
+            globalThis.chrome = {
+                runtime: {
+                    lastError: null,
+                    sendMessage: () => {},
+                    getManifest: () => ({ version: "1.0.0" }),
+                },
+                tabs: {},
+                storage: {
+                    onChanged: { addListener: () => {} },
+                    local: {},
+                    session: {},
+                },
+            };
+        }
+        globalThis.chrome.tabs ||= {};
+        globalThis.chrome.storage ||= {};
+        globalThis.chrome.storage.onChanged ||= { addListener: () => {} };
+        globalThis.chrome.storage.local ||= {};
+        globalThis.chrome.tabs.query = vi.fn(() => Promise.resolve([]));
+        globalThis.chrome.storage.onChanged.addListener = vi.fn();
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ allowed: false, credits: 0, isProUser: false }),
+            })
+        );
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         delete globalThis.window;
         delete globalThis.document;
         delete globalThis.Event;
     });
 
-    async function loadPopup(store = {}) {
-        const localStore = useLocalStore(store);
-        loadSharedScripts(["popup/content.js"]);
-        document.dispatchEvent(new Event("DOMContentLoaded"));
-        await flushPopup();
-        return localStore;
-    }
-
-    it("hydrates controls from bundled local defaults without backend modules", async () => {
-        await loadPopup();
-
-        expect(globalThis.AMZ_API).toBeUndefined();
-        expect(globalThis.AMZ_VALIDATION).toBeUndefined();
-        expect(document.getElementById("version").textContent).toContain("9.9.9");
-        expect([...document.getElementById("city").options].map(option => option.value))
-            .toContain("Toronto");
-        expect([...document.getElementById("distance").options].map(option => option.value))
-            .toContain("50");
-        expect([...document.getElementById("jobType").options].map(option => option.value))
-            .toEqual(["FULL_TIME", "PART_TIME", "FLEX_TIME", "REDUCED_TIME"]);
+    it("shows booking controls first and keeps email fields out of the landing markup", () => {
+        const html = readFileSync(resolve("src", "popup", "index.html"), "utf8");
+        expect(html).toContain("checkout_btn");
+        expect(html).toContain("checkout_pro_btn");
+        expect(html).toContain("$50");
+        expect(html).toContain("$120");
+        expect(html).toContain("id=\"city\"");
+        expect(html).toContain("id=\"distance\"");
+        expect(html).not.toContain("buyer_email");
+        expect(html).not.toContain("extension_username");
+        expect(html).not.toContain("admin_login_btn");
     });
 
-    it("activates with local all-city settings and notifies the active tab", async () => {
-        const { STORAGE_KEYS, MESSAGE_ACTIONS } = globalThis.AMZ_CONSTANTS;
-        const store = await loadPopup({
-            [STORAGE_KEYS.ALL_CITIES_SELECTED]: true,
-            [STORAGE_KEYS.CITY_TAGS]: ["Toronto"],
-            [STORAGE_KEYS.FETCH_INTERVAL_UNIT]: "ms",
-            [STORAGE_KEYS.FETCH_INTERVAL_VALUE]: "850",
+    it("enables activation with search scope even before a valid paid license", async () => {
+        loadPopupScripts();
+        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        useLocalStore({
+            [STORAGE_KEYS.SELECTED_CITY]: "Sidney",
+            [STORAGE_KEYS.CITY_TAGS]: ["Sidney"],
         });
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+        await flushPopup();
 
-        const activate = document.getElementById("activate");
-        activate.checked = true;
-        activate.dispatchEvent(new Event("change"));
+        expect(document.getElementById("activate").disabled).toBe(false);
+        expect(document.getElementById("license-status").textContent).toMatch(/Search is free/);
+    });
+
+    it("enables activation after license validation and search scope are valid", async () => {
+        loadPopupScripts();
+        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const store = useLocalStore({
+            [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
+            [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "amazon@example.com",
+            [STORAGE_KEYS.SELECTED_CITY]: "Sidney",
+            [STORAGE_KEYS.CITY_TAGS]: ["Sidney"],
+        });
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ allowed: true, credits: 2, isProUser: false, syncIntervalMs: 60000 }),
+            })
+        );
+
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+        await flushPopup();
+
+        expect(document.getElementById("activate").disabled).toBe(false);
+        document.getElementById("activate").checked = true;
+        document.getElementById("activate").dispatchEvent(new Event("change", { bubbles: true }));
         await flushPopup();
 
         expect(store[STORAGE_KEYS.ACTIVE]).toBe(true);
-        expect(globalThis.chrome.tabs.sendMessage).toHaveBeenCalledWith(123, {
-            action: MESSAGE_ACTIONS.ACTIVATE,
-            status: true,
-        });
     });
 
-    it("autosaves direct application mode and job type selections locally", async () => {
-        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
-        const store = await loadPopup({
-            [STORAGE_KEYS.ALL_CITIES_SELECTED]: true,
-            [STORAGE_KEYS.CITY_TAGS]: ["Toronto"],
-        });
+    it("opens hosted checkout pages without collecting emails in the popup", async () => {
+        loadPopupScripts();
+        useLocalStore();
+        const openSpy = vi.spyOn(globalThis.window, "open").mockImplementation(() => null);
+        globalThis.fetch = vi.fn();
 
-        const directMode = document.getElementById("use_direct_application");
-        directMode.checked = false;
-        directMode.dispatchEvent(new Event("change"));
-        document.getElementById("select-all-job-types").click();
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+        await flushPopup();
+        document.getElementById("checkout_btn").click();
+        await flushPopup();
+        document.getElementById("checkout_pro_btn").click();
         await flushPopup();
 
-        expect(store[STORAGE_KEYS.USE_DIRECT_APPLICATION]).toBe(false);
-        expect(store[STORAGE_KEYS.JOB_TYPE]).toEqual(["FULL_TIME", "PART_TIME", "FLEX_TIME", "REDUCED_TIME"]);
-        expect(document.getElementById("direct_application_mode_label").textContent).toBe("Manual");
-    });
-
-    it("reset keeps the extension local-only and restores all-city defaults", async () => {
-        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
-        const store = await loadPopup({
-            [STORAGE_KEYS.ACTIVE]: true,
-            [STORAGE_KEYS.SELECTED_CITY]: "Toronto",
-            [STORAGE_KEYS.ALL_CITIES_SELECTED]: false,
-            [STORAGE_KEYS.CITY_TAGS]: ["Toronto"],
-        });
-
-        document.getElementById("ais_visa_info").dispatchEvent(new Event("submit"));
-        await flushPopup();
-
-        expect(store[STORAGE_KEYS.ACTIVE]).toBe(false);
-        expect(store[STORAGE_KEYS.ALL_CITIES_SELECTED]).toBe(true);
-        expect(store[STORAGE_KEYS.CITY_TAGS]).toContain("Toronto");
-        expect(store[STORAGE_KEYS.OPERATOR_USERNAME]).toBe("");
-        expect(store[STORAGE_KEYS.SELECTED_CLIENT_ID]).toBe("");
+        expect(document.getElementById("checkout-buyer-email")).toBeNull();
+        expect(document.getElementById("checkout-amazon-email")).toBeNull();
+        expect(globalThis.fetch).not.toHaveBeenCalledWith(
+            expect.stringContaining("/license/checkout"),
+            expect.anything()
+        );
+        expect(openSpy).toHaveBeenNthCalledWith(
+            1,
+            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=credits",
+            "_blank",
+            "noopener,noreferrer"
+        );
+        expect(openSpy).toHaveBeenNthCalledWith(
+            2,
+            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=pro",
+            "_blank",
+            "noopener,noreferrer"
+        );
     });
 });

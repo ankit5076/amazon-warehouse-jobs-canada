@@ -81,18 +81,21 @@
   }
 
   function isApplicationFormPage(url = currentUrl()) {
-    if (!isCountryApplicationPage(url)) return false;
+    if (!isApplicationPage(url)) return false;
 
-    const context = getApplicationContextFromUrl(url);
     const route = getApplicationRouteName(url);
-    return Boolean(
-      context.applicationId ||
-      route === 'consent' ||
-      route.startsWith('consent/') ||
-      route.includes('general-questions') ||
-      route.includes('self-identification') ||
-      route.includes('application-experience')
-    );
+    if (route === 'consent' || route.startsWith('consent/')) return true;
+    if (!isCountryApplicationPage(url)) return false;
+    return /^(general-questions|self-identification|application-experience)(\/|$)/i
+      .test(route);
+  }
+
+  function isFinalApplicationFormPage(url = currentUrl()) {
+    if (!isApplicationPage(url)) return false;
+    const context = getApplicationContextFromUrl(url);
+    if (!context.applicationId) return false;
+    return /^(general-questions|self-identification|application-experience)(\/|$)/i
+      .test(getApplicationRouteName(url));
   }
 
   function isSensitiveUrlParamName(name) {
@@ -130,10 +133,6 @@
 
   function isJobSearchPage(url = currentUrl()) {
     return hasAppHashRoute(url, '/jobSearch');
-  }
-
-  function isMyApplicationsPage(url = currentUrl()) {
-    return hasAppHashRoute(url, '/myApplications');
   }
 
   function isJobDetailPage(url = currentUrl()) {
@@ -249,9 +248,9 @@
     isCountryApplicationPage,
     getApplicationRouteName,
     isApplicationFormPage,
+    isFinalApplicationFormPage,
     sanitizeNotificationUrl,
     isJobSearchPage,
-    isMyApplicationsPage,
     isJobDetailPage,
     isLoginPage,
     isContactInfoPage,

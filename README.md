@@ -1,4 +1,4 @@
-# Fastrack Amazon Jobs Extension
+# amazon-warehouse-ca Extension
 
 This extension watches the Amazon hiring job-search page, identifies matching job cards by city tags, navigates to the matching job detail page, and automates the schedule/application click path when the extension is active.
 
@@ -6,7 +6,10 @@ This extension watches the Amazon hiring job-search page, identifies matching jo
 
 - `shared/constants.js` — all static configuration, selectors, routes, storage keys, defaults, and timing values.
 - `shared/utils/*` — reusable text, URL, storage, city-tag, and interval helpers.
-- `background/*` — service-worker event routing plus background tab synchronization.
+- `shared/api-client.js` — backend calls for defaults, license checks, and Telegram notification relay delivery.
+- `shared/validation.js` — in-memory backend validation state.
+- `shared/telegram.js` — content-side notification dispatch.
+- `background/*` — service-worker event routing plus background tab and Telegram services.
 - `content/*` — page controllers and content-only services for login, polling, job search, schedule automation, alerts, application observability, and Create Application flow.
 - `popup/*` — popup UI controller and city-tag manager.
 
@@ -33,8 +36,8 @@ The popup value is not overwritten during backoff.
 
 ## Build output
 
-- `npm run build` regenerates `dist/amazon-shifts/` from `src/`.
-- `npm run package` regenerates `dist/amazon-shifts/` and writes `amazon-shifts-<manifest-version>.zip`.
+- `npm run build` regenerates `dist/amazon-warehouse-ca/` from `src/`.
+- `npm run package` regenerates `dist/amazon-warehouse-ca/` and writes `amazon-warehouse-ca-<manifest-version>.zip`.
 - Distribution JavaScript is obfuscated with per-file identifier prefixes. The build script uses a path-derived hash so scripts that share a browser global scope do not overwrite each other’s obfuscator helper functions.
 
 ## Operational notes
@@ -44,10 +47,12 @@ The popup value is not overwritten during backoff.
 - Create Application injection covers current and legacy application URL path variants.
 - Polling continues when job cards are returned but none match configured city tags.
 - Application observability begins only after a matched job exists. Empty polling,
-  no-match polling, and routine pre-match GraphQL failures should not create
-  application-attempt traces.
-- Observability is local-only and must never block booking or call external services.
-- Popup log mode controls console verbosity only.
+  no-match polling, and routine pre-match GraphQL failures should not emit tracker
+  application-attempt rows.
+- Observability POSTs are non-blocking and must continue even if the extension active
+  toggle is turned off mid-attempt.
+- Popup log mode controls console verbosity only; tracker-service observability delivery
+  must remain independent from console logging.
 
 ## Observability payload guardrails
 

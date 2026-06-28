@@ -4,8 +4,19 @@
 
   if (root.AMZ_STORAGE) return;
 
+  function normalizeGetKeys(keys) {
+    if (typeof keys === 'undefined' || keys === null) return undefined;
+    if (Array.isArray(keys)) return keys.filter(key => typeof key === 'string' && key);
+    if (typeof keys === 'string') return keys;
+    if (keys && typeof keys === 'object') return keys;
+    return undefined;
+  }
+
   async function getLocal(keys) {
-    return chrome.storage.local.get(keys);
+    const normalizedKeys = normalizeGetKeys(keys);
+    return typeof normalizedKeys === 'undefined'
+      ? chrome.storage.local.get()
+      : chrome.storage.local.get(normalizedKeys);
   }
 
   async function setLocal(values) {
@@ -26,8 +37,11 @@
 
   async function getSession(keys) {
     if (!hasSessionStorage()) return getLocal(keys);
+    const normalizedKeys = normalizeGetKeys(keys);
     try {
-      return await chrome.storage.session.get(keys);
+      return typeof normalizedKeys === 'undefined'
+        ? await chrome.storage.session.get()
+        : await chrome.storage.session.get(normalizedKeys);
     } catch (_) {
       return getLocal(keys);
     }
@@ -61,6 +75,7 @@
     removeLocal,
     clearLocal,
     hasSessionStorage,
+    normalizeGetKeys,
     getSession,
     setSession,
     removeSession,

@@ -153,11 +153,9 @@ function setupDirectApplicationHarness(options = {}) {
     globalThis.AMZ_NOTIFICATIONS = {
         emit: vi.fn(() => Promise.resolve({ ok: true, queued: true })),
     };
-    globalThis.AMZ_LOCAL_BOOKING_EVENTS = {
-        record: globalThis.AMZ_NOTIFICATIONS.emit,
-    };
 
     let createApplicationCount = 0;
+    let updateApplicationCount = 0;
     globalThis.fetch = vi.fn(async (url, requestOptions = {}) => {
         if (String(url).includes("/get-schedule-details/")) {
             if (options.scheduleUnavailable === true) {
@@ -237,7 +235,35 @@ function setupDirectApplicationHarness(options = {}) {
                     },
                 });
             }
+        if (String(url).includes("/update-workflow-step-name")) {
+            return jsonResponse(200, {
+                data: {
+                    currentState: "JOB_SELECTED",
+                    jobScheduleSelected: {
+                        scheduleId: "SCH-1",
+                    },
+                    workflowStepName: "\"general-questions\"",
+                },
+            });
+        }
         if (String(url).includes("/update-application")) {
+            updateApplicationCount += 1;
+            if (options.confirmUnavailableAfterSuccess === true && updateApplicationCount > 1) {
+                return jsonResponse(200, {
+                    data: {
+                        errorCode: "SELECTED_SCHEDULE_NOT_AVAILABLE",
+                        errorMessage: "The schedule you have selected is no longer available.",
+                    },
+                });
+            }
+            if (options.confirmApplicationCreatedNoSchedule === true) {
+                return jsonResponse(200, {
+                    data: {
+                        applicationId: "application-1",
+                        currentState: "APPLICATION_CREATED",
+                    },
+                });
+            }
             if (options.confirmThinSuccess === true) {
                 return jsonResponse(200, {
                     data: {
@@ -269,6 +295,25 @@ function setupDirectApplicationHarness(options = {}) {
                 { message: "captcha required" },
                 { [DIRECT_APPLICATION.WAF.CAPTCHA_HEADER_NAME]: DIRECT_APPLICATION.WAF.CAPTCHA_HEADER_VALUE }
             );
+        }
+        if (String(url).includes("/applications/application-1")) {
+            if (options.applicationDetailsUnavailable === true) {
+                return jsonResponse(404, {
+                    data: {
+                        errorCode: "APPLICATION_NOT_FOUND",
+                        errorMessage: "Application details unavailable.",
+                    },
+                });
+            }
+            return jsonResponse(200, {
+                data: {
+                    currentState: "JOB_SELECTED",
+                    jobScheduleSelected: {
+                        scheduleId: "SCH-1",
+                    },
+                    workflowStepName: "\"general-questions\"",
+                },
+            });
         }
         if (String(url).includes("/applications/reserved/")) {
             if (options.reservedWithoutSchedule === true) {
@@ -507,11 +552,11 @@ describe("Direct application workflow", () => {
     });
 
     it("records country application form routes and keeps automation active without direct APIs", async () => {
-        const { storageWrites } = setupDirectApplicationHarness({
+        const { storageWrites, notifications } = setupDirectApplicationHarness({
             useDirectApplication: true,
             url: "https://hiring.amazon.com/application/us/?country=us&jobId=JOB-1&scheduleId=SCH-1#/general-questions?country=us&jobId=JOB-1&scheduleId=SCH-1&applicationId=app-1",
         });
-        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const { NOTIFICATIONS, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const recordApplicationFormOpened = vi.fn(async () => ({ ok: true, status: 201 }));
         globalThis.AMZ_APPLICATION_OBSERVABILITY = {
             recordApplicationFormOpened,
@@ -532,13 +577,180 @@ describe("Direct application workflow", () => {
             expect.objectContaining({
                 route: "general-questions",
                 source: "application-form-route",
+                terminal: true,
+                outcome: "BOOKED",
             })
         );
-        expect(globalThis.AMZ_STORAGE.removeLocal)
-            .toHaveBeenCalledWith(STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING);
+        expect(notifications.emit).toHaveBeenCalledWith(
+            NOTIFICATIONS.EVENTS.FORM_OPENED,
+            expect.objectContaining({
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+                applicationId: "app-1",
+                currentState: "APPLICATION_FORM_OPENED",
+                mode: "direct",
+                workflowStepName: "general-questions",
+                redirectUrl: expect.stringContaining("#/general-questions?"),
+            }),
+            expect.any(Object)
+        );
         expect(storageWrites).not.toContainEqual({
             [STORAGE_KEYS.ACTIVE]: false,
         });
+
+        await globalThis.AMZ_DIRECT_APPLICATION.run("repeat-final-form-route");
+        await flush();
+
+        expect(recordApplicationFormOpened).toHaveBeenCalledTimes(1);
+        expect(notifications.emit.mock.calls.filter(([event]) =>
+            event === NOTIFICATIONS.EVENTS.FORM_OPENED
+        )).toHaveLength(1);
+    });
+
+    it("emits final manual success when the Amazon application form opens", async () => {
+        const { notifications } = setupDirectApplicationHarness({
+            useDirectApplication: false,
+            url: "https://hiring.amazon.ca/application/ca/?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1#/general-questions?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1",
+        });
+        const { NOTIFICATIONS } = globalThis.AMZ_CONSTANTS;
+        const recordApplicationFormOpened = vi.fn(async () => ({ ok: true, status: 201 }));
+        globalThis.AMZ_APPLICATION_OBSERVABILITY = {
+            recordApplicationFormOpened,
+            finalizePendingDeactivated: vi.fn(),
+        };
+
+        loadDirectApplicationScripts();
+
+        await waitFor(() => notifications.emit.mock.calls.length >= 2);
+
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+        expect(recordApplicationFormOpened).toHaveBeenCalledWith(
+            expect.objectContaining({
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+                applicationId: "app-1",
+            }),
+            expect.objectContaining({
+                route: "general-questions",
+                source: "application-form-route",
+                terminal: true,
+                outcome: "BOOKED",
+            })
+        );
+        expect(notifications.emit).toHaveBeenCalledWith(
+            NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED,
+            expect.objectContaining({
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+                applicationId: "app-1",
+                currentState: "APPLICATION_FORM_OPENED",
+                selectedScheduleId: "SCH-1",
+                mode: "manual",
+                workflowStepName: "general-questions",
+                redirectUrl: expect.stringContaining("#/general-questions?"),
+            }),
+            expect.any(Object)
+        );
+        expect(notifications.emit).toHaveBeenCalledWith(
+            NOTIFICATIONS.EVENTS.FORM_OPENED,
+            expect.objectContaining({
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+                applicationId: "app-1",
+                currentState: "APPLICATION_FORM_OPENED",
+                selectedScheduleId: "SCH-1",
+                mode: "manual",
+                workflowStepName: "general-questions",
+                redirectUrl: expect.stringContaining("#/general-questions?"),
+            }),
+            expect.any(Object)
+        );
+    });
+
+    it("does not repeatedly redirect an already confirmed application while the form shell settles", async () => {
+        setupDirectApplicationHarness({
+            useDirectApplication: true,
+            redirectAfterSuccess: true,
+            url: "https://hiring.amazon.ca/application/ca/?applicationId=app-1&country=ca&jobId=JOB-1&locale=en-CA&scheduleId=SCH-1",
+        });
+        const { DIRECT_APPLICATION } = globalThis.AMZ_CONSTANTS;
+        globalThis.sessionStorage.setItem(
+            [
+                DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
+                "JOB-1",
+                "SCH-1",
+            ].join("::"),
+            JSON.stringify({
+                stage: DIRECT_APPLICATION.STAGES.JOB_CONFIRMED,
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+                applicationId: "app-1",
+                confirmedScheduleId: "SCH-1",
+                currentState: "JOB_SELECTED",
+            })
+        );
+        const realWindowSetTimeout = globalThis.window.setTimeout.bind(globalThis.window);
+        const redirectSchedules = [];
+        globalThis.window.setTimeout = (callback, delay, ...args) => {
+            if (String(callback).includes("window.location.assign")) {
+                redirectSchedules.push({ delay });
+                return 0;
+            }
+            return realWindowSetTimeout(callback, delay, ...args);
+        };
+
+        loadDirectApplicationScripts();
+
+        await waitFor(() => redirectSchedules.length === 1);
+        await globalThis.AMZ_DIRECT_APPLICATION.run("repeat-terminal-success-route");
+        await flush();
+
+        expect(redirectSchedules).toHaveLength(1);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("suppresses stale unavailable failures after the same application is already booked", async () => {
+        const { storageWrites, notifications } = setupDirectApplicationHarness({
+            useDirectApplication: true,
+            confirmJobSelected: true,
+            confirmUnavailableAfterSuccess: true,
+        });
+        const { DIRECT_APPLICATION, NOTIFICATIONS, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+
+        loadDirectApplicationScripts();
+
+        await waitFor(() => notifications.emit.mock.calls.some(([event]) =>
+            event === NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED
+        ));
+        globalThis.sessionStorage.setItem(
+            [
+                DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
+                "JOB-1",
+                "SCH-1",
+            ].join("::"),
+            JSON.stringify({
+                stage: DIRECT_APPLICATION.STAGES.APPLICATION_CREATED_WAITING_FOR_CONFIRM,
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+                applicationId: "application-1",
+                currentState: "APPLICATION_CREATED",
+            })
+        );
+
+        await globalThis.AMZ_DIRECT_APPLICATION.run("stale-confirm-after-success");
+        await flush();
+
+        expect(notifications.emit.mock.calls.some(([event]) =>
+            event === NOTIFICATIONS.EVENTS.BOOKING_FAILED
+        )).toBe(false);
+        expect(storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .some(result =>
+                result.stage === DIRECT_APPLICATION.STAGES.APPLICATION_CREATED_WITHOUT_SCHEDULE &&
+                result.errorCode === "SELECTED_SCHEDULE_NOT_AVAILABLE"
+            )
+        ).toBe(false);
     });
 
     it("warms WAF tokens without blocking create and confirm APIs", async () => {
@@ -599,7 +811,8 @@ describe("Direct application workflow", () => {
                 applicationId: "application-1",
                 currentState: "JOB_SELECTED",
                 clientEmail: "client-attempt@example.com",
-                redirectUrl: expect.stringContaining("#/consent?"),
+                mode: "direct",
+                redirectUrl: expect.stringContaining("#/general-questions?"),
             }),
             expect.any(Object)
         );
@@ -607,7 +820,8 @@ describe("Direct application workflow", () => {
             .find(([event]) => event === NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED)?.[1];
         expect(successPayload.redirectUrl).toContain("applicationId=application-1");
         expect(successPayload.redirectUrl).toContain("scheduleId=SCH-1");
-        expect(successPayload.redirectUrl).not.toBe(globalThis.AMZ_CONSTANTS.AMAZON.URLS.MY_APPLICATIONS);
+        expect(successPayload.redirectUrl).not.toContain("#/consent?");
+        expect(successPayload.redirectUrl).not.toContain("/app#/myApplications");
         await waitFor(() => Boolean(globalThis.document.querySelector(".amazon-booking-confirmed-toast")));
         expect(globalThis.document.querySelector(".amazon-booking-confirmed-toast").textContent)
             .toContain("Booking confirmed");
@@ -646,7 +860,7 @@ describe("Direct application workflow", () => {
         ).toBe(false);
     });
 
-    it("redirects confirmed selected schedules to Amazon consent with application and schedule", async () => {
+    it("rehydrates and updates workflow before redirecting confirmed schedules to the form", async () => {
         const { storageWrites, notifications, audioPlays } = setupDirectApplicationHarness({
             useDirectApplication: true,
             confirmJobSelected: true,
@@ -655,8 +869,15 @@ describe("Direct application workflow", () => {
         });
         const { DIRECT_APPLICATION, STORAGE_KEYS, NOTIFICATIONS } = globalThis.AMZ_CONSTANTS;
         const realWindowSetTimeout = globalThis.window.setTimeout.bind(globalThis.window);
+        const redirectSchedules = [];
         globalThis.window.setTimeout = (callback, delay, ...args) => {
-            if (String(callback).includes("window.location.assign")) return 0;
+            if (String(callback).includes("window.location.assign")) {
+                redirectSchedules.push({
+                    delay,
+                    fetchCount: globalThis.fetch.mock.calls.length,
+                });
+                return 0;
+            }
             return realWindowSetTimeout(callback, delay, ...args);
         };
 
@@ -671,7 +892,7 @@ describe("Direct application workflow", () => {
             NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED,
             expect.objectContaining({
                 applicationId: "application-1",
-                redirectUrl: expect.stringContaining("#/consent?"),
+                redirectUrl: expect.stringContaining("#/general-questions?"),
             }),
             expect.any(Object)
         );
@@ -679,7 +900,8 @@ describe("Direct application workflow", () => {
             .find(([event]) => event === NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED)?.[1];
         expect(successPayload.redirectUrl).toContain("applicationId=application-1");
         expect(successPayload.redirectUrl).toContain("scheduleId=SCH-1");
-        expect(successPayload.redirectUrl).not.toBe(globalThis.AMZ_CONSTANTS.AMAZON.URLS.MY_APPLICATIONS);
+        expect(successPayload.redirectUrl).not.toContain("#/consent?");
+        expect(successPayload.redirectUrl).not.toContain("/app#/myApplications");
         const createBody = JSON.parse(globalThis.fetch.mock.calls
             .find(call => String(call[0]).includes("/ds/create-application/"))[1].body);
         expect(createBody).toEqual(expect.objectContaining({
@@ -689,10 +911,24 @@ describe("Direct application workflow", () => {
         expect(globalThis.fetch.mock.calls.some(call =>
             String(call[0]).includes("/update-application")
         )).toBe(true);
-        expect(storageWrites.some(write =>
-            write[STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING]?.applicationId === "application-1" &&
-            write[STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING]?.jobId === "JOB-1"
-        )).toBe(false);
+        await waitFor(() => storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .some(result =>
+                result.stage === DIRECT_APPLICATION.STAGES.WORKFLOW_UPDATED &&
+                result.formHandoff === true
+            )
+        );
+        await waitFor(() => redirectSchedules.length === 1);
+        const preRedirectFetches = globalThis.fetch.mock.calls
+            .slice(0, redirectSchedules[0].fetchCount)
+            .map(call => String(call[0]));
+        expect(preRedirectFetches.filter(url =>
+            url.includes("/application/api/candidate-application/applications/application-1")
+        )).toHaveLength(2);
+        expect(preRedirectFetches.some(url =>
+            url.includes("/application/api/candidate-application/update-workflow-step-name")
+        )).toBe(true);
         await waitFor(() => audioPlays.includes("assets/sounds/alert.wav"));
     });
 
@@ -723,7 +959,7 @@ describe("Direct application workflow", () => {
             confirmedScheduleId: "SCH-1",
         }));
         expect(globalThis.fetch.mock.calls.some(call =>
-            String(call[0]).includes("/applications/reserved/application-1")
+            String(call[0]).includes("/applications/application-1")
         )).toBe(true);
         expect(notifications.emit).toHaveBeenCalledWith(
             NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED,
@@ -735,49 +971,141 @@ describe("Direct application workflow", () => {
         );
     });
 
-    it("rejects provisional confirm when reserved application does not contain the selected schedule", async () => {
+    it("falls back to reserved application verification if official application details is unavailable", async () => {
+        const { storageWrites } = setupDirectApplicationHarness({
+            useDirectApplication: true,
+            confirmThinSuccess: true,
+            applicationDetailsUnavailable: true,
+        });
+        const { DIRECT_APPLICATION, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+
+        loadDirectApplicationScripts();
+
+        await waitFor(() => storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .some(result => result.stage === DIRECT_APPLICATION.STAGES.JOB_CONFIRMED)
+        );
+
+        expect(globalThis.fetch.mock.calls.some(call =>
+            String(call[0]).includes("/applications/application-1")
+        )).toBe(true);
+        expect(globalThis.fetch.mock.calls.some(call =>
+            String(call[0]).includes("/applications/reserved/application-1")
+        )).toBe(true);
+    });
+
+    it("continues provisional confirm when reserved application details are stale", async () => {
         const { storageWrites, notifications } = setupDirectApplicationHarness({
             useDirectApplication: true,
             confirmThinSuccess: true,
+            applicationDetailsUnavailable: true,
             reservedWithoutSchedule: true,
         });
         const { DIRECT_APPLICATION, STORAGE_KEYS, NOTIFICATIONS } = globalThis.AMZ_CONSTANTS;
 
         loadDirectApplicationScripts();
 
-        await waitFor(() => {
-            const result = storageWrites
-                .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
-                .filter(Boolean)
-                .at(-1);
-            return result?.stage === DIRECT_APPLICATION.STAGES.RESERVATION_VERIFICATION_FAILED ||
-                result?.stage === DIRECT_APPLICATION.STAGES.FAILED;
-        });
-
-        const result = storageWrites
-            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
-            .filter(Boolean)
-            .at(-1);
-
-        expect(result).toEqual(expect.objectContaining({
-            errorClassification:
-                DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
-            errorMessage: "Reserved application did not contain the selected schedule.",
-            fallbackAllowed: false,
-        }));
-        expect(storageWrites
+        await waitFor(() => storageWrites
             .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
             .filter(Boolean)
             .some(entry => entry.stage === DIRECT_APPLICATION.STAGES.JOB_CONFIRMED)
-        ).toBe(false);
+        );
+
+        const verificationResult = storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .find(entry => entry.stage === DIRECT_APPLICATION.STAGES.RESERVATION_VERIFICATION_FAILED);
+
+        expect(verificationResult).toEqual(expect.objectContaining({
+            errorClassification:
+                DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
+            nonBlockingProvisional: true,
+            fallbackAllowed: false,
+        }));
+        const confirmedResult = storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .find(entry => entry.stage === DIRECT_APPLICATION.STAGES.JOB_CONFIRMED);
+        expect(confirmedResult).toEqual(expect.objectContaining({
+            currentState: "JOB_SELECTED",
+            confirmedScheduleId: "SCH-1",
+            provisionalConfirm: true,
+            provisionalScheduleFallback: true,
+        }));
         expect(notifications.emit).toHaveBeenCalledWith(
-            NOTIFICATIONS.EVENTS.BOOKING_FAILED,
+            NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED,
             expect.objectContaining({
-                errorClassification:
-                    DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
+                currentState: "JOB_SELECTED",
+                selectedScheduleId: "SCH-1",
             }),
             expect.any(Object)
         );
+    });
+
+    it("opens the final form route for application-created job-confirm bodies", async () => {
+        const { storageWrites, notifications } = setupDirectApplicationHarness({
+            useDirectApplication: true,
+            confirmApplicationCreatedNoSchedule: true,
+            applicationDetailsUnavailable: true,
+            reservedWithoutSchedule: true,
+            redirectAfterSuccess: true,
+            url: "https://hiring.amazon.ca/application/ca/?country=ca&locale=en-CA&jobId=JOB-1&scheduleId=SCH-1",
+        });
+        const { DIRECT_APPLICATION, STORAGE_KEYS, NOTIFICATIONS } = globalThis.AMZ_CONSTANTS;
+        const realWindowSetTimeout = globalThis.window.setTimeout.bind(globalThis.window);
+        const redirectSchedules = [];
+        globalThis.window.setTimeout = (callback, delay, ...args) => {
+            if (String(callback).includes("window.location.assign")) {
+                redirectSchedules.push({
+                    delay,
+                    fetchCount: globalThis.fetch.mock.calls.length,
+                });
+                return 0;
+            }
+            return realWindowSetTimeout(callback, delay, ...args);
+        };
+
+        loadDirectApplicationScripts();
+
+        await waitFor(() => storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .some(result =>
+                result.stage === DIRECT_APPLICATION.STAGES.WORKFLOW_UPDATED &&
+                result.formHandoff === true
+            )
+        );
+        await waitFor(() => redirectSchedules.length === 1);
+
+        const confirmedResult = storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .find(result => result.stage === DIRECT_APPLICATION.STAGES.JOB_CONFIRMED);
+        expect(confirmedResult).toEqual(expect.objectContaining({
+            currentState: "JOB_SELECTED",
+            confirmedScheduleId: "SCH-1",
+            provisionalConfirm: true,
+            provisionalScheduleFallback: true,
+        }));
+        const successPayload = notifications.emit.mock.calls
+            .find(([event]) => event === NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED)?.[1];
+        expect(successPayload).toEqual(expect.objectContaining({
+            applicationId: "application-1",
+            currentState: "JOB_SELECTED",
+            selectedScheduleId: "SCH-1",
+        }));
+        expect(successPayload.redirectUrl).toContain("#/general-questions?");
+        expect(successPayload.redirectUrl).toContain("applicationId=application-1");
+        expect(successPayload.redirectUrl).toContain("scheduleId=SCH-1");
+        expect(successPayload.redirectUrl).not.toContain("#/consent?");
+        expect(successPayload.redirectUrl).not.toContain("/app#/myApplications");
+        const preRedirectFetches = globalThis.fetch.mock.calls
+            .slice(0, redirectSchedules[0].fetchCount)
+            .map(call => String(call[0]));
+        expect(preRedirectFetches.some(url =>
+            url.includes("/application/api/candidate-application/update-workflow-step-name")
+        )).toBe(true);
     });
 
     it("sends official-style workflow websocket messages after verified success", async () => {
@@ -886,12 +1214,12 @@ describe("Direct application workflow", () => {
     });
 
     it("starts direct APIs from the early application URL before the country route", async () => {
-        const { storageWrites } = setupDirectApplicationHarness({
+        const { storageWrites, notifications } = setupDirectApplicationHarness({
             useDirectApplication: true,
             confirmJobSelected: true,
             url: "https://hiring.amazon.com/application/?jobId=JOB-1&page=pre-consent&scheduleId=SCH-1&locale=en-US&country=us&token=secret",
         });
-        const { DIRECT_APPLICATION, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const { DIRECT_APPLICATION, NOTIFICATIONS, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
 
         loadDirectApplicationScripts();
 
@@ -905,6 +1233,66 @@ describe("Direct application workflow", () => {
         expect(globalThis.fetch.mock.calls.some(call =>
             String(call[0]).includes("/ds/create-application/")
         )).toBe(true);
+        const successPayload = notifications.emit.mock.calls
+            .find(([event]) => event === NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED)?.[1];
+        expect(successPayload.redirectUrl)
+            .toContain("https://hiring.amazon.com/application/us/");
+        expect(successPayload.redirectUrl).toContain("#/general-questions?");
+        expect(successPayload.redirectUrl).toContain("applicationId=application-1");
+    });
+
+    it("resumes direct confirmation when Amazon drops scheduleId on an applicationId route", async () => {
+        const { storageWrites, notifications } = setupDirectApplicationHarness({
+            useDirectApplication: true,
+            confirmJobSelected: true,
+            url: "https://hiring.amazon.ca/application/ca/?applicationId=application-1&jobId=JOB-1&locale=en-CA",
+        });
+        const { DIRECT_APPLICATION, NOTIFICATIONS, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        globalThis.sessionStorage.setItem(
+            [
+                DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
+                "JOB-1",
+                "SCH-1",
+            ].join("::"),
+            JSON.stringify({
+                stage: DIRECT_APPLICATION.STAGES.APPLICATION_CREATED_WAITING_FOR_CONFIRM,
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+                applicationId: "application-1",
+                candidateId: "candidate-1",
+                currentState: "APPLICATION_CREATED",
+            })
+        );
+
+        loadDirectApplicationScripts();
+
+        await waitFor(() => storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .some(result => result.stage === DIRECT_APPLICATION.STAGES.JOB_CONFIRMED)
+        );
+
+        expect(globalThis.fetch.mock.calls.some(call =>
+            String(call[0]).includes("/ds/create-application/")
+        )).toBe(false);
+        const confirmCall = globalThis.fetch.mock.calls
+            .find(call => String(call[0]).includes("/update-application"));
+        expect(JSON.parse(confirmCall[1].body)).toEqual(expect.objectContaining({
+            applicationId: "application-1",
+            payload: expect.objectContaining({
+                jobId: "JOB-1",
+                scheduleId: "SCH-1",
+            }),
+        }));
+        expect(notifications.emit).toHaveBeenCalledWith(
+            NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED,
+            expect.objectContaining({
+                applicationId: "application-1",
+                scheduleId: "SCH-1",
+                redirectUrl: expect.stringContaining("scheduleId=SCH-1"),
+            }),
+            expect.any(Object)
+        );
     });
 
     it("skips duplicate direct API work when another navigation context owns the attempt lock", async () => {
@@ -978,7 +1366,7 @@ describe("Direct application workflow", () => {
         });
     });
 
-    it("keeps post-create SELECTED_SCHEDULE_NOT_AVAILABLE off cooldown before consent handoff", async () => {
+    it("marks post-create SELECTED_SCHEDULE_NOT_AVAILABLE unavailable before returning to search", async () => {
         const { storageWrites } = setupDirectApplicationHarness({
             useDirectApplication: true,
             confirmUnavailable: true,
@@ -1011,11 +1399,21 @@ describe("Direct application workflow", () => {
             ].join("::")
         ));
 
-        expect(wildcardCooldown).toBeNull();
-        expect(exactCooldown).toBeNull();
+        expect(wildcardCooldown).toEqual(expect.objectContaining({
+            jobId: "JOB-1",
+            scheduleId: "SCH-1",
+            applicationId: "application-1",
+            errorCode: "SELECTED_SCHEDULE_NOT_AVAILABLE",
+        }));
+        expect(exactCooldown).toEqual(expect.objectContaining({
+            jobId: "JOB-1",
+            scheduleId: "SCH-1",
+            applicationId: "application-1",
+            errorCode: "SELECTED_SCHEDULE_NOT_AVAILABLE",
+        }));
     });
 
-    it("routes to consent when post-create job-confirm cannot keep the selected schedule", async () => {
+    it("returns to job search when post-create job-confirm cannot keep the selected schedule", async () => {
         const { storageWrites, notifications, audioPlays } = setupDirectApplicationHarness({
             useDirectApplication: true,
             confirmUnavailable: true,
@@ -1054,11 +1452,14 @@ describe("Direct application workflow", () => {
             String(call[0]).includes("/get-all-schedules/JOB-1")
         )).toBe(false);
         expect(globalThis.sessionStorage.getItem("scheduleNotAvailable")).toBeNull();
-        expect(globalThis.sessionStorage.getItem([
+        expect(JSON.parse(globalThis.sessionStorage.getItem([
             DIRECT_APPLICATION.UNAVAILABLE_SCHEDULE_STORAGE_PREFIX,
             "JOB-1",
             "SCH-1",
-        ].join("::"))).toBeNull();
+        ].join("::")))).toEqual(expect.objectContaining({
+            applicationId: "application-1",
+            errorCode: "SELECTED_SCHEDULE_NOT_AVAILABLE",
+        }));
         const finalResult = storageWrites
             .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
             .filter(Boolean)
@@ -1080,19 +1481,15 @@ describe("Direct application workflow", () => {
                     DIRECT_APPLICATION.ERROR_CLASSIFICATIONS.UNAVAILABLE_OR_RESERVATION_FAILED,
                 postCreateConfirmFailed: true,
                 withoutSelectedSchedule: true,
-                redirectUrl: expect.stringContaining("#/consent?"),
+                redirectUrl: "https://hiring.amazon.ca/app#/jobSearch",
             }),
             expect.any(Object)
         );
         const failurePayload = notifications.emit.mock.calls
             .find(([event]) => event === NOTIFICATIONS.EVENTS.BOOKING_FAILED)?.[1];
-        expect(failurePayload.redirectUrl).toContain("applicationId=application-1");
-        expect(failurePayload.redirectUrl).not.toContain("scheduleId=SCH-1");
-        expect(failurePayload.redirectUrl).not.toBe(globalThis.AMZ_CONSTANTS.AMAZON.URLS.MY_APPLICATIONS);
-        expect(storageWrites.some(write =>
-            write[STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING]?.applicationId === "application-1" &&
-            write[STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING]?.jobId === "JOB-1"
-        )).toBe(false);
+        expect(failurePayload.redirectUrl).toBe("https://hiring.amazon.ca/app#/jobSearch");
+        expect(failurePayload.redirectUrl).not.toContain("#/consent?");
+        expect(failurePayload.redirectUrl).not.toContain("/app#/myApplications");
         await waitFor(() => audioPlays.includes("assets/sounds/alert.wav"));
     });
 
@@ -1100,8 +1497,21 @@ describe("Direct application workflow", () => {
         const { storageWrites, notifications } = setupDirectApplicationHarness({
             useDirectApplication: true,
             confirmUnavailable: true,
+            redirectAfterSuccess: true,
         });
         const { DIRECT_APPLICATION, NOTIFICATIONS, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const realWindowSetTimeout = globalThis.window.setTimeout.bind(globalThis.window);
+        const redirectSchedules = [];
+        globalThis.window.setTimeout = (callback, delay, ...args) => {
+            if (String(callback).includes("window.location.assign")) {
+                redirectSchedules.push({
+                    delay,
+                    fetchCount: globalThis.fetch.mock.calls.length,
+                });
+                return 0;
+            }
+            return realWindowSetTimeout(callback, delay, ...args);
+        };
         globalThis.sessionStorage.setItem(
             [
                 DIRECT_APPLICATION.GUARD_STORAGE_PREFIX,
@@ -1126,6 +1536,16 @@ describe("Direct application workflow", () => {
             .filter(Boolean)
             .some(result => result.stage === DIRECT_APPLICATION.STAGES.JOB_CONFIRMED)
         );
+        await waitFor(() => storageWrites
+            .map(write => write[STORAGE_KEYS.DIRECT_APPLICATION_RESULT])
+            .filter(Boolean)
+            .some(result =>
+                result.stage === DIRECT_APPLICATION.STAGES.WORKFLOW_UPDATED &&
+                result.formHandoff === true &&
+                result.resumedFromSelectedApplication === true
+            )
+        );
+        await waitFor(() => redirectSchedules.length === 1);
 
         expect(notifications.emit).toHaveBeenCalledWith(
             NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED,
@@ -1136,16 +1556,23 @@ describe("Direct application workflow", () => {
             }),
             expect.any(Object)
         );
+        const preRedirectFetches = globalThis.fetch.mock.calls
+            .slice(0, redirectSchedules[0].fetchCount)
+            .map(call => String(call[0]));
+        expect(preRedirectFetches.some(url =>
+            url.includes("/application/api/candidate-application/update-workflow-step-name")
+        )).toBe(true);
     });
 
     it("goes silent on consent form routes without a schedule id", async () => {
-        const { storageWrites, notifications } = setupDirectApplicationHarness({
+        const { notifications } = setupDirectApplicationHarness({
             useDirectApplication: true,
             url: "https://hiring.amazon.ca/application/ca/?jobId=JOB-1#/consent?jobId=JOB-1&locale=en-CA",
         });
-        const { DIRECT_APPLICATION, STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const { DIRECT_APPLICATION } = globalThis.AMZ_CONSTANTS;
+        const toastKey = DIRECT_APPLICATION.GUARD_STORAGE_PREFIX + "::booking-confirmed-toast";
         globalThis.sessionStorage.setItem(
-            DIRECT_APPLICATION.GUARD_STORAGE_PREFIX + "::booking-confirmed-toast",
+            toastKey,
             JSON.stringify({
                 jobId: "JOB-1",
                 scheduleId: "SCH-1",
@@ -1156,14 +1583,12 @@ describe("Direct application workflow", () => {
         );
 
         loadDirectApplicationScripts();
-        await waitFor(() => globalThis.AMZ_STORAGE.removeLocal.mock.calls.length > 0);
+        await waitFor(() => globalThis.sessionStorage.getItem(toastKey) === null);
 
         expect(notifications.emit).not.toHaveBeenCalled();
         expect(globalThis.fetch).not.toHaveBeenCalled();
         expect(globalThis.document.querySelector(".amazon-booking-confirmed-toast")).toBeNull();
-        expect(globalThis.sessionStorage.getItem(
-            DIRECT_APPLICATION.GUARD_STORAGE_PREFIX + "::booking-confirmed-toast"
-        )).toBeNull();
+        expect(globalThis.sessionStorage.getItem(toastKey)).toBeNull();
     });
 
     it("uses the same no-schedule fallback before create when schedule verification catches staleness", async () => {
@@ -1246,7 +1671,7 @@ describe("Direct application workflow", () => {
         const failurePayload = notifications.emit.mock.calls
             .find(([event]) => event === NOTIFICATIONS.EVENTS.BOOKING_FAILED)?.[1];
         expect(failurePayload.redirectUrl).toContain("jobId=JOB-1");
-        expect(failurePayload.redirectUrl).not.toBe(globalThis.AMZ_CONSTANTS.AMAZON.URLS.MY_APPLICATIONS);
+        expect(failurePayload.redirectUrl).not.toContain("/app#/myApplications");
         expect(globalThis.sessionStorage.getItem([
             DIRECT_APPLICATION.UNAVAILABLE_SCHEDULE_STORAGE_PREFIX,
             "JOB-1",
@@ -1293,10 +1718,7 @@ describe("Direct application workflow", () => {
         const failurePayload = notifications.emit.mock.calls
             .find(([event]) => event === NOTIFICATIONS.EVENTS.BOOKING_FAILED)?.[1];
         expect(failurePayload.redirectUrl).toContain("jobId=JOB-1");
-        expect(failurePayload.redirectUrl).not.toBe(globalThis.AMZ_CONSTANTS.AMAZON.URLS.MY_APPLICATIONS);
-        expect(storageWrites.some(write =>
-            write[STORAGE_KEYS.DIRECT_SELECT_SHIFTS_PENDING]?.jobId === "JOB-1"
-        )).toBe(false);
+        expect(failurePayload.redirectUrl).not.toContain("/app#/myApplications");
         expect(globalThis.sessionStorage.getItem([
             DIRECT_APPLICATION.UNAVAILABLE_SCHEDULE_STORAGE_PREFIX,
             "JOB-1",

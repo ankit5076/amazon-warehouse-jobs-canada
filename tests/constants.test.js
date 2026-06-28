@@ -17,16 +17,17 @@ describe("AMZ_CONSTANTS namespace", () => {
             "ALERTS",
             "AMAZON",
             "AUTH_PROBE",
+            "BACKEND",
             "CREATE_APPLICATION",
             "DIRECT_APPLICATION",
             "DOM",
             "EMAIL_REGEX",
             "IDENTITY",
             "INSTALL_DEFAULTS",
-            "LOCAL_DEFAULTS",
             "LOGGING",
             "MESSAGE_ACTIONS",
             "NOTIFICATIONS",
+            "PAYMENT_GATE",
             "POLLING",
             "POPUP",
             "RESET_DEFAULTS",
@@ -56,9 +57,6 @@ describe("AMAZON configuration", () => {
 
     it("redirect URLs point at expected hash routes", () => {
         const expectedDomain = AMZ_CONSTANTS.isCanada ? "hiring.amazon.ca" : "hiring.amazon.com";
-        expect(AMZ_CONSTANTS.AMAZON.URLS.MY_APPLICATIONS).toBe(
-            `https://${expectedDomain}/app#/myApplications`
-        );
         expect(AMZ_CONSTANTS.AMAZON.URLS.JOB_SEARCH).toBe(
             `https://${expectedDomain}/app#/jobSearch`
         );
@@ -157,10 +155,42 @@ describe("LOGGING", () => {
 describe("CREATE_APPLICATION", () => {
     it("delays are positive integers", () => {
         const createApplication = AMZ_CONSTANTS.CREATE_APPLICATION;
+        expect(createApplication).not.toHaveProperty("REDIRECT_URL");
+        expect(createApplication).not.toHaveProperty("REDIRECT_DELAY_MS");
         expect(Number.isInteger(createApplication.NATIVE_CLICK_DELAY_MS)).toBe(true);
         expect(createApplication.NATIVE_CLICK_DELAY_MS).toBeGreaterThan(0);
         expect(Number.isInteger(createApplication.POST_NEXT_RESCAN_MS)).toBe(true);
         expect(createApplication.POST_NEXT_RESCAN_MS).toBeGreaterThan(0);
+        expect(Number.isInteger(createApplication.POST_ACTION_RESCAN_MS)).toBe(true);
+        expect(createApplication.POST_ACTION_RESCAN_MS).toBeGreaterThan(0);
+        expect(createApplication.POST_ACTION_RESCAN_MS).toBeLessThan(
+            createApplication.POST_NEXT_RESCAN_MS
+        );
+        expect(Number.isInteger(createApplication.ROUTE_CHANGE_RESCAN_MS)).toBe(true);
+        expect(createApplication.ROUTE_CHANGE_RESCAN_MS).toBeGreaterThanOrEqual(0);
+        expect(createApplication.ROUTE_CHANGE_RESCAN_MS).toBeLessThan(
+            createApplication.POST_ACTION_RESCAN_MS
+        );
+        expect(Number.isInteger(createApplication.ROUTE_SCAN_INTERVAL_MS)).toBe(true);
+        expect(createApplication.ROUTE_SCAN_INTERVAL_MS).toBeGreaterThan(0);
+        expect(createApplication.ROUTE_SCAN_INTERVAL_MS).toBeLessThan(
+            createApplication.POST_NEXT_RESCAN_MS
+        );
+        expect(Number.isInteger(createApplication.ROUTE_SCAN_TIMEOUT_MS)).toBe(true);
+        expect(createApplication.ROUTE_SCAN_TIMEOUT_MS).toBeGreaterThan(
+            createApplication.ROUTE_SCAN_INTERVAL_MS
+        );
+    });
+
+    it("keeps the native manual booking button labels explicit", () => {
+        expect(AMZ_CONSTANTS.CREATE_APPLICATION.BUTTON_TEXT).toEqual(
+            expect.objectContaining({
+                NEXT: "Next",
+                CREATE_APPLICATION: "Create Application",
+                START_APPLICATION: "Start application",
+                SELECT_THIS_JOB: "Select this job",
+            })
+        );
     });
 
     it("injects the direct-application mode helper before the native UI controller", () => {
@@ -221,7 +251,6 @@ describe("DIRECT_APPLICATION", () => {
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.SCHEDULE_DETAIL_PREFETCH_ENABLED).toBe(true);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.JOB_DETAIL_PREFETCH_ENABLED).toBe(true);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.SCHEDULE_DETAIL_WORKFLOW_WAIT_MS).toBe(250);
-        expect(AMZ_CONSTANTS.DIRECT_APPLICATION.MY_APPLICATIONS_REDIRECT_DELAY_MS).toBe(0);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.CREATE_WITHOUT_SCHEDULE_FALLBACK_ENABLED).toBe(true);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.CONSENT_REDIRECT_DELAY_MS).toBe(0);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.NO_AVAILABLE_SHIFT_REDIRECT_DELAY_MS).toBe(0);
@@ -231,15 +260,17 @@ describe("DIRECT_APPLICATION", () => {
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.SELECTED_SCHEDULE_CONSENT_HANDOFF_ENABLED).toBe(true);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.POST_CREATE_CONFIRM_FAILURE_CONSENT_HANDOFF_ENABLED)
             .toBe(true);
-        expect(AMZ_CONSTANTS.DIRECT_APPLICATION.TERMINAL_MY_APPLICATIONS_REDIRECT_ENABLED)
-            .toBe(false);
-        expect(AMZ_CONSTANTS.DIRECT_APPLICATION.MY_APPLICATIONS_SELECT_SHIFT_HANDOFF_ENABLED).toBe(false);
-        expect(AMZ_CONSTANTS.DIRECT_APPLICATION.MY_APPLICATIONS_ACTIVE_SELECT_SHIFT_ENABLED).toBe(true);
-        expect(AMZ_CONSTANTS.DIRECT_APPLICATION.SUCCESS_MY_APPLICATIONS_FALLBACK_ENABLED).toBe(false);
-        expect(AMZ_CONSTANTS.DIRECT_APPLICATION.SUCCESS_MY_APPLICATIONS_FALLBACK_DELAY_MS)
-            .toBeGreaterThan(0);
-        expect(AMZ_CONSTANTS.DIRECT_APPLICATION.EXISTING_APPLICATION_MY_APPLICATIONS_HANDOFF_ENABLED)
-            .toBe(false);
+        [
+            "TERMINAL_MY_APPLICATIONS_REDIRECT_ENABLED",
+            "MY_APPLICATIONS_SELECT_SHIFT_HANDOFF_ENABLED",
+            "MY_APPLICATIONS_ACTIVE_SELECT_SHIFT_ENABLED",
+            "SUCCESS_MY_APPLICATIONS_FALLBACK_ENABLED",
+            "SUCCESS_MY_APPLICATIONS_FALLBACK_DELAY_MS",
+            "EXISTING_APPLICATION_MY_APPLICATIONS_HANDOFF_ENABLED",
+            "MY_APPLICATIONS_REDIRECT_DELAY_MS",
+        ].forEach(key => {
+            expect(AMZ_CONSTANTS.DIRECT_APPLICATION).not.toHaveProperty(key);
+        });
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.ACTIVE_ATTEMPT_LOCK_TTL_MS).toBeGreaterThan(0);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.UNAVAILABLE_SCHEDULE_COOLDOWN_MS).toBeGreaterThan(0);
         expect(AMZ_CONSTANTS.DIRECT_APPLICATION.EXISTING_APPLICATION_COOLDOWN_MS).toBeGreaterThan(0);
@@ -265,19 +296,25 @@ describe("DIRECT_APPLICATION", () => {
 });
 
 describe("NOTIFICATIONS", () => {
-    it("defines canonical local workflow events without external channels", () => {
+    it("defines canonical workflow events without legacy Telegram stages", () => {
         const { NOTIFICATIONS } = AMZ_CONSTANTS;
-        expect(NOTIFICATIONS.CHANNELS).toBeUndefined();
-        expect(Object.values(NOTIFICATIONS.EVENTS)).toEqual([
-            "job.found",
-            "booking.succeeded",
-            "booking.failed",
-        ]);
+        expect(NOTIFICATIONS.CHANNELS.TELEGRAM).toBe("telegram");
+        expect(NOTIFICATIONS.EVENTS.JOB_MATCHED).toBe("job_matched");
+        expect(NOTIFICATIONS.EVENTS.JOB_FOUND).toBe("job_matched");
+        expect(NOTIFICATIONS.EVENTS.BOOKED).toBe("booked");
+        expect(NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED).toBe("booked");
+        expect(NOTIFICATIONS.EVENTS.FORM_OPENED).toBe("form.opened");
+        expect(NOTIFICATIONS.EVENT_ALIASES).toMatchObject({
+            "job.found": "job_matched",
+            "job.matched": "job_matched",
+            "booking.succeeded": "booked",
+            "booking.booked": "booked",
+        });
         expect(NOTIFICATIONS.STANDARD_EVENTS).toEqual([
-            NOTIFICATIONS.EVENTS.JOB_FOUND,
-            NOTIFICATIONS.EVENTS.BOOKING_SUCCEEDED,
-            NOTIFICATIONS.EVENTS.BOOKING_FAILED,
+            NOTIFICATIONS.EVENTS.JOB_MATCHED,
+            NOTIFICATIONS.EVENTS.BOOKED,
         ]);
+        expect(AMZ_CONSTANTS.TELEGRAM).toBeUndefined();
     });
 });
 
@@ -289,21 +326,31 @@ describe("INSTALL_DEFAULTS", () => {
         expect(AMZ_CONSTANTS.INSTALL_DEFAULTS.useDirectApplication).toBe(true);
     });
 
-    it("seeds local defaults and blank runtime-owned fields", () => {
+    it("seeds local runtime defaults imported from the tracker service", () => {
         const installDefaults = AMZ_CONSTANTS.INSTALL_DEFAULTS;
-        expect(installDefaults.selectedCity).toBe("");
+        expect(installDefaults.selectedCity).toBe("Sidney");
         expect(installDefaults.allCitiesSelected).toBe(false);
-        expect(installDefaults.distance).toBe("");
-        expect(installDefaults.jobType).toEqual([]);
-        expect(installDefaults.fetchIntervalValue).toBe("850");
+        expect(installDefaults.distance).toBe("150");
+        expect(installDefaults.jobType).toEqual(["FULL_TIME", "PART_TIME", "FLEX_TIME", "REDUCED_TIME"]);
+        expect(installDefaults.fetchIntervalValue).toBe("650");
         expect(installDefaults.fetchIntervalUnit).toBe("ms");
+        expect(AMZ_CONSTANTS.BACKEND.FALLBACK_DEFAULTS.jobSearch.fallbackDistanceKm).toBe(5);
+        expect(AMZ_CONSTANTS.BACKEND.FALLBACK_DEFAULTS.jobSearch.fetchTimeoutMs).toBe(15000);
+        expect(AMZ_CONSTANTS.BACKEND.FALLBACK_DEFAULTS.pageRefresh.jobSearchIntervalMs).toBe(120000);
+        expect(Object.keys(AMZ_CONSTANTS.BACKEND.FALLBACK_DEFAULTS.cityCoordinates)).toHaveLength(42);
+        expect(AMZ_CONSTANTS.BACKEND.FALLBACK_DEFAULTS.cityCoordinates.Sidney).toEqual({
+            lat: 48.650629,
+            lng: -123.398604,
+        });
         expect(installDefaults.__amz_operator_username).toBe("");
         expect(installDefaults.__amz_selected_client_id).toBe("");
         expect(installDefaults.__amz_selected_client_label).toBe("");
     });
 
-    it("seeds an empty city-tags list so the server-supplied list wins", () => {
-        expect(AMZ_CONSTANTS.INSTALL_DEFAULTS.cityTags).toEqual([]);
+    it("seeds local city tags so the extension can run without tracker defaults", () => {
+        expect(AMZ_CONSTANTS.INSTALL_DEFAULTS.cityTags).toContain("Sidney");
+        expect(AMZ_CONSTANTS.INSTALL_DEFAULTS.cityTags).toContain("Toronto");
+        expect(AMZ_CONSTANTS.INSTALL_DEFAULTS.cityTags).toHaveLength(39);
     });
 
     it("resets log mode to standard", () => {
@@ -311,7 +358,7 @@ describe("INSTALL_DEFAULTS", () => {
     });
 
     it("resets fetch interval to the local polling default", () => {
-        expect(AMZ_CONSTANTS.RESET_DEFAULTS.fetchIntervalValue).toBe("850");
+        expect(AMZ_CONSTANTS.RESET_DEFAULTS.fetchIntervalValue).toBe("650");
         expect(AMZ_CONSTANTS.RESET_DEFAULTS.fetchIntervalUnit).toBe("ms");
     });
 });
@@ -356,6 +403,12 @@ describe("timing configuration", () => {
         expect(AMZ_CONSTANTS.SCHEDULE_AUTOMATION.NO_APPLY_JOB_SEARCH_REDIRECT_DELAY_MS).toBe(1500);
         expect(AMZ_CONSTANTS.SCHEDULE_AUTOMATION.POST_SELECT_SCHEDULE_OPTIONS_GRACE_MS).toBe(1500);
         expect(AMZ_CONSTANTS.SCHEDULE_AUTOMATION.POST_SCHEDULE_LABEL_APPLY_GRACE_MS).toBe(1500);
+        expect(AMZ_CONSTANTS.SCHEDULE_AUTOMATION.APPLY_CLICK_GUARD_TTL_MS).toBeGreaterThan(
+            AMZ_CONSTANTS.SCHEDULE_AUTOMATION.POST_SCHEDULE_LABEL_APPLY_GRACE_MS
+        );
+        expect(AMZ_CONSTANTS.SCHEDULE_AUTOMATION.APPLY_CLICK_GUARD_TTL_MS).toBeLessThan(
+            AMZ_CONSTANTS.SCHEDULE_AUTOMATION.HARD_STOP_DELAY_MS
+        );
     });
 
     it("defines the default poll interval and scheduled jitter range", () => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * MV3 build script - produces a shareable, obfuscated Chrome extension under
- * `dist/amazon-shifts/` and optionally a zip next to it.
+ * `dist/amazon-warehouse-ca/` and optionally a zip next to it.
  *
  * The source tree intentionally stays split by domain for maintainability. The
  * distributable is flattened into MV3-safe execution-context bundles:
@@ -24,16 +24,17 @@ const crypto = require("crypto");
 const esbuild = require("esbuild");
 const obfuscator = require("javascript-obfuscator");
 const archiver = require("archiver");
+const { assertProductionBackendUrl } = require("./assert-production-backend");
 
 const ROOT = path.resolve(__dirname, "..");
 const SRC = path.join(ROOT, "src");
 const DIST = path.join(ROOT, "dist");
-const OUT = path.join(DIST, "amazon-shifts");
+const OUT = path.join(DIST, "amazon-warehouse-ca");
 
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(SRC, "manifest.json"), "utf8"));
 const VERSION = MANIFEST.version || PKG.version || "0.0.0";
-const ZIP_NAME = `amazon-shifts-${VERSION}.zip`;
+const ZIP_NAME = `amazon-warehouse-ca-${VERSION}.zip`;
 const ZIP_PATH = path.join(ROOT, ZIP_NAME);
 
 const ESBUILD_TARGET = ["chrome114"];
@@ -64,12 +65,18 @@ const OBFUSCATOR_OPTS = {
 const CONTEXTS = Object.freeze({
     APPLICATION_CONTENT: Object.freeze([
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
         "shared/utils/text.js",
         "shared/utils/storage.js",
         "shared/utils/url.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
+        "shared/api-client.js",
         "content/utils/application-observability.js",
+        "shared/notifications.js",
         "content/utils/alerts.js",
         "content/utils/direct-application-api.js",
         "content/utils/direct-application-guard.js",
@@ -79,6 +86,7 @@ const CONTEXTS = Object.freeze({
     ]),
     MAIN_CONTENT: Object.freeze([
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
         "shared/utils/text.js",
         "shared/utils/storage.js",
@@ -89,8 +97,14 @@ const CONTEXTS = Object.freeze({
         "shared/utils/runtime-controls.js",
         "shared/utils/state-store.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
         "content/utils/auth-probe.js",
         "content/utils/page-refresh.js",
+        "shared/api-client.js",
+        "shared/validation.js",
+        "shared/notifications.js",
         "content/utils/dom.js",
         "content/utils/application-observability.js",
         "content/utils/identity.js",
@@ -105,6 +119,7 @@ const CONTEXTS = Object.freeze({
     ]),
     POPUP: Object.freeze([
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
         "shared/utils/text.js",
         "shared/utils/storage.js",
@@ -114,29 +129,49 @@ const CONTEXTS = Object.freeze({
         "shared/utils/runtime-controls.js",
         "shared/utils/state-store.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
+        "shared/api-client.js",
+        "shared/validation.js",
         "popup/tag-manager.js",
         "popup/content.js",
     ]),
     BACKGROUND_DEPS: Object.freeze([
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
         "shared/utils/text.js",
         "shared/utils/storage.js",
         "shared/utils/account.js",
         "shared/utils/url.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
+        "shared/api-client.js",
+        "shared/validation.js",
+        "background/telegram.js",
+        "background/notification-service.js",
         "background/tab-service.js",
     ]),
     CREATE_APPLICATION: Object.freeze([
         "shared/constants.js",
+        "shared/utils/time.js",
         "shared/utils/logger.js",
         "shared/utils/text.js",
         "shared/utils/url.js",
         "shared/utils/storage.js",
         "shared/utils/messaging.js",
+        "shared/utils/license-api.js",
+        "shared/utils/license-state.js",
+        "shared/utils/payment-gate.js",
         "content/utils/dom.js",
         "content/utils/direct-application-guard.js",
         "content/utils/direct-application-mode.js",
+        "shared/api-client.js",
+        "shared/validation.js",
+        "shared/notifications.js",
         "content/createapp.js",
     ]),
 });
@@ -356,8 +391,7 @@ function buildManifest({
         {
             matches: ["<all_urls>"],
             resources: [
-                "assets/images/amazon.png",
-                "assets/images/fastrack_amazon.png",
+                "assets/images/canada-flag.png",
                 "assets/sounds/alert.wav",
                 "assets/sounds/alert_long.wav",
                 "assets/fonts/Quicksand.ttf",
@@ -384,7 +418,7 @@ function zipDist() {
         zip.on("warning", (err) => (err.code === "ENOENT" ? log("zip", err.message) : reject(err)));
         zip.on("error", reject);
         zip.pipe(out);
-        zip.directory(OUT, "amazon-shifts");
+        zip.directory(OUT, "amazon-warehouse-ca");
         zip.finalize();
     });
 }
@@ -393,6 +427,9 @@ function zipDist() {
 
 async function main() {
     const wantZip = process.argv.includes("--zip");
+
+    assertProductionBackendUrl();
+    log("check", "production backend URL confirmed");
 
     log("clean", `removing ${path.relative(ROOT, DIST)} and ${ZIP_NAME}`);
     rmrf(DIST);
