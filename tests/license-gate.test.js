@@ -94,12 +94,18 @@ describe("license API", () => {
         );
     });
 
-    it("builds hosted checkout page URLs for both plans", () => {
-        expect(globalThis.AMZ_LICENSE_API.checkoutPageUrl({ purchaseType: "access" })).toBe(
-            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=access"
-        );
-        expect(globalThis.AMZ_LICENSE_API.checkoutPageUrl({ purchaseType: "pro" })).toBe(
-            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=pro"
+    it("starts hosted checkout through the backend", async () => {
+        mockFetchJson({ checkoutUrl: "https://checkout.dodo/session", allowed: false });
+
+        const response = await globalThis.AMZ_LICENSE_API.createCheckout({ purchaseType: "pro" });
+
+        expect(response.checkoutUrl).toBe("https://checkout.dodo/session");
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            "https://getslotnow.com/extension-usage-tracker/api/amazon-warehouse-jobs-canada/license/checkout",
+            expect.objectContaining({
+                method: "POST",
+                body: expect.stringContaining('"purchaseType":"pro"'),
+            })
         );
     });
 });

@@ -436,7 +436,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       button.innerText = 'Opening...';
     }
     try {
-      const checkoutUrl = licenseApi.checkoutPageUrl({ purchaseType });
+      const identity = await licenseState.getStoredEmails();
+      const response = await licenseApi.createCheckout({
+        ...identity,
+        purchaseType,
+      });
+      const checkoutUrl = response.checkoutUrl;
+      if (!checkoutUrl) throw new Error(response.message || 'Unable to start checkout.');
       await openCheckoutUrl(checkoutUrl);
     } catch (error) {
       setLicenseStatus(error?.message || 'Unable to start checkout.', 'error');

@@ -28,11 +28,6 @@
     return String(value || '').replace(/\/+$/, '');
   }
 
-  function checkoutRootUrl() {
-    const config = gateConfig();
-    return trimRightSlash(config.baseUrl).replace(/\/api\/.*$/, '');
-  }
-
   function normalizeEmail(value) {
     return String(value || '').trim().toLowerCase();
   }
@@ -102,18 +97,14 @@
     const config = gateConfig();
     const emailId = normalizeEmail(input.emailId || input.buyerEmail || input.email);
     const amazonEmailId = normalizeEmail(input.amazonEmailId || input.amazonEmail);
-    if (!emailId || !amazonEmailId) {
-      return normalizeLicenseResponse(null, {
-        message: 'Enter both buyer and Amazon booking emails.',
-      });
-    }
+    const purchaseType = String(input.purchaseType || input.plan || 'access').trim() === 'pro' ? 'pro' : 'access';
     const result = await request(config.endpoints.checkout, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        emailId,
-        amazonEmailId,
-        purchaseType: 'access',
+        ...(emailId ? { emailId } : {}),
+        ...(amazonEmailId ? { amazonEmailId } : {}),
+        purchaseType,
         productId: config.productId,
         country: config.country,
         extension: config.extensionName,
@@ -122,13 +113,6 @@
     return normalizeLicenseResponse(result.body, {
       message: result.ok ? '' : 'Unable to start checkout.',
     });
-  }
-
-  function checkoutPageUrl(input = {}) {
-    const config = gateConfig();
-    const purchaseType = String(input.purchaseType || input.plan || 'access').trim() === 'pro' ? 'pro' : 'access';
-    const query = new URLSearchParams({ plan: purchaseType });
-    return `${checkoutRootUrl()}/checkout/${encodeURIComponent(config.productId)}?${query.toString()}`;
   }
 
   async function recordUsage(payload = {}) {
@@ -162,7 +146,6 @@
     gateConfig,
     normalizeEmail,
     normalizeLicenseResponse,
-    checkoutPageUrl,
     checkLicense,
     createCheckout,
     recordUsage,

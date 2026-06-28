@@ -243,6 +243,20 @@ describe("paid popup gate", () => {
 
         document.dispatchEvent(new Event("DOMContentLoaded"));
         await flushPopup();
+        globalThis.fetch = vi.fn((url, init) => {
+            const body = JSON.parse(init?.body || "{}");
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({
+                    allowed: false,
+                    isProUser: false,
+                    checkoutUrl: body.purchaseType === "pro"
+                        ? "https://checkout.dodo/pro"
+                        : "https://checkout.dodo/access",
+                }),
+            });
+        });
         document.getElementById("checkout_btn").click();
         await flushPopup();
         document.getElementById("checkout_pro_btn").click();
@@ -250,19 +264,19 @@ describe("paid popup gate", () => {
 
         expect(document.getElementById("checkout-buyer-email")).toBeNull();
         expect(document.getElementById("checkout-amazon-email")).toBeNull();
-        expect(globalThis.fetch).not.toHaveBeenCalledWith(
-            expect.stringContaining("/license/checkout"),
-            expect.anything()
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            "https://getslotnow.com/extension-usage-tracker/api/amazon-warehouse-jobs-canada/license/checkout",
+            expect.objectContaining({ method: "POST" })
         );
         expect(openSpy).toHaveBeenNthCalledWith(
             1,
-            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=access",
+            "https://checkout.dodo/access",
             "_blank",
             "noopener,noreferrer"
         );
         expect(openSpy).toHaveBeenNthCalledWith(
             2,
-            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=pro",
+            "https://checkout.dodo/pro",
             "_blank",
             "noopener,noreferrer"
         );
