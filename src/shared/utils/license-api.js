@@ -19,6 +19,7 @@
       endpoints: {
         check: endpoints.CHECK || endpoints.LICENSE_CHECK || '/license/check',
         checkout: endpoints.CHECKOUT || '/license/checkout',
+        plans: endpoints.PLANS || '/license/plans',
         usage: endpoints.USAGE || '/license/usage',
       },
     };
@@ -115,6 +116,18 @@
     });
   }
 
+  async function getPlans() {
+    const config = gateConfig();
+    const result = await request(config.endpoints.plans, {
+      method: 'GET',
+    });
+    const plans = result.body?.plans && typeof result.body.plans === 'object' ? result.body.plans : {};
+    return {
+      access: plans.access !== false,
+      pro: plans.pro === true,
+    };
+  }
+
   async function recordUsage(payload = {}) {
     const config = gateConfig();
     const emailId = normalizeEmail(payload.emailId || payload.buyerEmail || payload.email);
@@ -148,6 +161,7 @@
     normalizeLicenseResponse,
     checkLicense,
     createCheckout,
+    getPlans,
     recordUsage,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : self);

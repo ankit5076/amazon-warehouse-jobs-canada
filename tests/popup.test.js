@@ -164,11 +164,13 @@ describe("paid popup gate", () => {
         globalThis.chrome.storage.local ||= {};
         globalThis.chrome.tabs.query = vi.fn(() => Promise.resolve([]));
         globalThis.chrome.storage.onChanged.addListener = vi.fn();
-        globalThis.fetch = vi.fn(() =>
+        globalThis.fetch = vi.fn(url =>
             Promise.resolve({
                 ok: true,
                 status: 200,
-                json: () => Promise.resolve({ allowed: false, isProUser: false }),
+                json: () => Promise.resolve(String(url).includes("/license/plans")
+                    ? { plans: { access: true, pro: true } }
+                    : { allowed: false, isProUser: false }),
             })
         );
     });
@@ -239,11 +241,14 @@ describe("paid popup gate", () => {
         loadPopupScripts();
         useLocalStore();
         const openSpy = vi.spyOn(globalThis.window, "open").mockImplementation(() => null);
-        globalThis.fetch = vi.fn();
-
-        document.dispatchEvent(new Event("DOMContentLoaded"));
-        await flushPopup();
         globalThis.fetch = vi.fn((url, init) => {
+            if (String(url).includes("/license/plans")) {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: () => Promise.resolve({ plans: { access: true, pro: true } }),
+                });
+            }
             const body = JSON.parse(init?.body || "{}");
             return Promise.resolve({
                 ok: true,
@@ -257,6 +262,9 @@ describe("paid popup gate", () => {
                 }),
             });
         });
+
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+        await flushPopup();
         document.getElementById("checkout_btn").click();
         await flushPopup();
         document.getElementById("checkout_pro_btn").click();

@@ -966,6 +966,7 @@
     ENDPOINTS: Object.freeze({
       CHECK: '/license/check',
       CHECKOUT: '/license/checkout',
+      PLANS: '/license/plans',
       USAGE: '/license/usage',
     }),
   });

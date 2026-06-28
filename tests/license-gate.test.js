@@ -108,6 +108,18 @@ describe("license API", () => {
             })
         );
     });
+
+    it("loads provider plan availability from the backend", async () => {
+        mockFetchJson({ plans: { access: true, pro: false } });
+
+        const response = await globalThis.AMZ_LICENSE_API.getPlans();
+
+        expect(response).toEqual({ access: true, pro: false });
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+            "https://getslotnow.com/extension-usage-tracker/api/amazon-warehouse-jobs-canada/license/plans",
+            expect.objectContaining({ method: "GET" })
+        );
+    });
 });
 
 describe("license state", () => {

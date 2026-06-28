@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let cityCoordinates = runtimeControls.cityCoordinates || {};
   let resetInProgress = false;
   let currentLicense = null;
+  let availablePlans = { access: true, pro: false };
 
   const elements = {
     city: document.getElementById('city'),
@@ -392,12 +393,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       await state.setActive(false);
     }
     if (elements.checkoutButton) {
-      elements.checkoutButton.disabled = false;
+      elements.checkoutButton.disabled = availablePlans.access !== true;
+      elements.checkoutButton.hidden = availablePlans.access !== true;
     }
     if (elements.checkoutProButton) {
-      elements.checkoutProButton.disabled = false;
+      elements.checkoutProButton.disabled = availablePlans.pro !== true;
+      elements.checkoutProButton.hidden = availablePlans.pro !== true;
     }
     setLicenseStatus(formatLicenseMessage(currentLicense), licenseAllowed ? 'success' : 'warning');
+  }
+
+  async function refreshAvailablePlans() {
+    try {
+      availablePlans = await licenseApi.getPlans();
+    } catch (error) {
+      availablePlans = { access: true, pro: false };
+      log.warn('plan discovery failed', { message: error?.message }, USER_LOG_OPTIONS);
+    }
   }
 
   async function refreshLicense(options = {}) {
@@ -478,6 +490,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       licenseState.getStoredEmails(),
       licenseState.loadCachedState(),
     ]);
+    await refreshAvailablePlans();
     currentLicense = cachedLicense;
 
     const selectedCity = stored[STORAGE_KEYS.SELECTED_CITY] || '';
