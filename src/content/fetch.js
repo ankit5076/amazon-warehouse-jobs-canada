@@ -796,7 +796,7 @@
       toasts.showCreditsRequiredPopup({
         city: matchedJob.city,
         jobId: matchedJob.jobId || null,
-        reason: paidGate?.reason || 'credits-required',
+        reason: paidGate?.reason || 'access-required',
       });
       return null;
     }

@@ -1,4 +1,4 @@
-/* Shared Supabase credit gate. Keep this file byte-identical across paid extensions. */
+/* Shared Supabase paid-access gate. Keep this file byte-identical across paid extensions. */
 (function (root) {
   'use strict';
 
@@ -43,7 +43,7 @@
   async function failClosed(reason, license) {
     return {
       ok: false,
-      reason: reason || 'credits-required',
+      reason: reason || 'access-required',
       license: license || null,
     };
   }
@@ -51,7 +51,7 @@
   async function requireAllowed(options = {}) {
     const license = await licenseState.getAllowedState({ allowCache: options.allowCache !== false });
     if (!licenseState.isAllowedState(license) || !licenseState.isFresh(license)) {
-      return failClosed('credits-required', license);
+      return failClosed('access-required', license);
     }
     return { ok: true, license };
   }
@@ -80,7 +80,7 @@
     await storage.setLocal({ [key]: keys });
   }
 
-  async function consumeBookingCredit(details = {}) {
+  async function recordBookingUsage(details = {}) {
     const gate = await requireAllowed({ allowCache: true });
     if (!gate.ok) return gate;
 
@@ -94,14 +94,14 @@
     });
     const keys = await readUsageKeys();
     if (keys[idempotencyKey]) {
-      return { ok: true, skipped: 'already-consumed', license: gate.license, idempotencyKey };
+      return { ok: true, skipped: 'already-recorded', license: gate.license, idempotencyKey };
     }
     if (gate.license.isProUser === true) {
       await markUsageKey(idempotencyKey, 'pro-user');
       return { ok: true, skipped: 'pro-user', license: gate.license, idempotencyKey };
     }
 
-    const response = await licenseApi.consumeUsage({
+    const response = await licenseApi.recordUsage({
       ...identity,
       idempotencyKey,
       jobId: details.jobId || null,
@@ -124,7 +124,7 @@
     canActivate,
     requireAllowed,
     buildUsageIdempotencyKey,
-    consumeBookingCredit,
-    consumeForBookingAttempt: consumeBookingCredit,
+    recordBookingUsage,
+    recordUsageForBookingAttempt: recordBookingUsage,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : self);

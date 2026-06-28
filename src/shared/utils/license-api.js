@@ -1,4 +1,4 @@
-/* Shared Supabase credit-gate API client. Keep this file byte-identical across paid extensions. */
+/* Shared Supabase paid-access API client. Keep this file byte-identical across paid extensions. */
 (function (root) {
   'use strict';
 
@@ -52,7 +52,6 @@
     const source = raw && typeof raw === 'object' ? raw : {};
     return {
       allowed: source.allowed === true,
-      credits: Math.max(0, normalizeInteger(source.credits, 0)),
       isProUser: source.isProUser === true,
       accessExpiresAt: String(source.accessExpiresAt || fallback.accessExpiresAt || '').trim(),
       checkoutUrl: String(source.checkoutUrl || fallback.checkoutUrl || '').trim(),
@@ -95,7 +94,7 @@
       method: 'GET',
     });
     return normalizeLicenseResponse(result.body, {
-      message: result.ok ? '' : 'Unable to validate credits.',
+      message: result.ok ? '' : 'Unable to validate booking access.',
     });
   }
 
@@ -114,6 +113,7 @@
       body: JSON.stringify({
         emailId,
         amazonEmailId,
+        purchaseType: 'access',
         productId: config.productId,
         country: config.country,
         extension: config.extensionName,
@@ -126,12 +126,12 @@
 
   function checkoutPageUrl(input = {}) {
     const config = gateConfig();
-    const purchaseType = String(input.purchaseType || input.plan || 'credits').trim() === 'pro' ? 'pro' : 'credits';
+    const purchaseType = String(input.purchaseType || input.plan || 'access').trim() === 'pro' ? 'pro' : 'access';
     const query = new URLSearchParams({ plan: purchaseType });
     return `${checkoutRootUrl()}/checkout/${encodeURIComponent(config.productId)}?${query.toString()}`;
   }
 
-  async function consumeUsage(payload = {}) {
+  async function recordUsage(payload = {}) {
     const config = gateConfig();
     const emailId = normalizeEmail(payload.emailId || payload.buyerEmail || payload.email);
     const amazonEmailId = normalizeEmail(payload.amazonEmailId || payload.amazonEmail);
@@ -165,6 +165,6 @@
     checkoutPageUrl,
     checkLicense,
     createCheckout,
-    consumeUsage,
+    recordUsage,
   });
 })(typeof globalThis !== 'undefined' ? globalThis : self);

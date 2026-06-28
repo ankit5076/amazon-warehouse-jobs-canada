@@ -1,4 +1,4 @@
-/* Shared Supabase credit-gate state helpers. Keep this file byte-identical across paid extensions. */
+/* Shared Supabase paid-access state helpers. Keep this file byte-identical across paid extensions. */
 (function (root) {
   'use strict';
 
@@ -35,11 +35,7 @@
   }
 
   function isAllowedState(state) {
-    return Boolean(
-      state &&
-      state.allowed === true &&
-      (state.isProUser === true || Number(state.credits || 0) > 0)
-    );
+    return Boolean(state && state.allowed === true);
   }
 
   function isFresh(state) {
@@ -175,10 +171,9 @@
       await clearState({ preserveEmails: true });
       return {
         allowed: false,
-        credits: 0,
         isProUser: false,
         checkoutUrl: '',
-        message: error?.message || 'Unable to validate credits.',
+        message: error?.message || 'Unable to validate booking access.',
         syncIntervalMs: Number(api.gateConfig().defaultSyncIntervalMs || 15 * 60 * 1000),
         emailId: resolved.emailId,
         amazonEmailId: resolved.amazonEmailId,

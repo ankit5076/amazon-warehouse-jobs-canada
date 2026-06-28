@@ -27,8 +27,8 @@ function installPopupDom() {
             </div>
             <input id="use_direct_application" type="checkbox">
             <strong id="direct_application_mode_label"></strong>
-            <div class="credit-actions">
-              <button id="checkout_btn" data-plan="credits" type="button">Get 30 days</button>
+            <div class="access-actions">
+              <button id="checkout_btn" data-plan="access" type="button">Get 30 days</button>
               <button id="checkout_pro_btn" data-plan="pro" type="button">Go Pro</button>
               <small id="license-status"></small>
             </div>
@@ -168,7 +168,7 @@ describe("paid popup gate", () => {
             Promise.resolve({
                 ok: true,
                 status: 200,
-                json: () => Promise.resolve({ allowed: false, credits: 0, isProUser: false }),
+                json: () => Promise.resolve({ allowed: false, isProUser: false }),
             })
         );
     });
@@ -220,7 +220,7 @@ describe("paid popup gate", () => {
             Promise.resolve({
                 ok: true,
                 status: 200,
-                json: () => Promise.resolve({ allowed: true, credits: 2, isProUser: false, syncIntervalMs: 60000 }),
+                json: () => Promise.resolve({ allowed: true, isProUser: false, syncIntervalMs: 60000 }),
             })
         );
 
@@ -256,7 +256,7 @@ describe("paid popup gate", () => {
         );
         expect(openSpy).toHaveBeenNthCalledWith(
             1,
-            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=credits",
+            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=access",
             "_blank",
             "noopener,noreferrer"
         );

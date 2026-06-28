@@ -70,10 +70,10 @@ describe("AMZ_VALIDATION paid-license adapter", () => {
         expect(globalThis.AMZ_VALIDATION.check()).toEqual({ ok: false });
     });
 
-    it("allows a fresh paid credit license", async () => {
+    it("allows a fresh paid-access license", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         useLocalStore({ [STORAGE_KEYS.LICENSE_EMAIL]: "paid@example.com" });
-        mockFetchLicense({ allowed: true, credits: 3, isProUser: false, syncIntervalMs: 60000 });
+        mockFetchLicense({ allowed: true, isProUser: false, syncIntervalMs: 60000 });
 
         const policy = await globalThis.AMZ_VALIDATION.refreshFromServer("paid@example.com");
 
@@ -83,13 +83,13 @@ describe("AMZ_VALIDATION paid-license adapter", () => {
         expect(globalThis.AMZ_VALIDATION.isAllowedForUsername("paid@example.com")).toBe(true);
     });
 
-    it("disables activation when the backend denies or credits are empty", async () => {
+    it("disables activation when the backend denies paid access", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const store = useLocalStore({
             [STORAGE_KEYS.LICENSE_EMAIL]: "empty@example.com",
             [STORAGE_KEYS.ACTIVE]: true,
         });
-        mockFetchLicense({ allowed: false, credits: 0, isProUser: false, message: "No credits" });
+        mockFetchLicense({ allowed: false, isProUser: false, message: "No active paid access" });
 
         const policy = await globalThis.AMZ_VALIDATION.refreshFromServer("empty@example.com");
 

@@ -428,8 +428,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  async function startCheckout(plan = 'credits', button = elements.checkoutButton) {
-    const purchaseType = button?.dataset?.plan === 'pro' || plan === 'pro' ? 'pro' : 'credits';
+  async function startCheckout(plan = 'access', button = elements.checkoutButton) {
+    const purchaseType = button?.dataset?.plan === 'pro' || plan === 'pro' ? 'pro' : 'access';
     const originalText = button?.innerText || '';
     if (button) {
       button.disabled = true;
@@ -627,7 +627,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   elements.checkoutButton?.addEventListener('click', () => {
-    startCheckout('credits', elements.checkoutButton).catch(error => log.error('checkout failed:', error));
+    startCheckout('access', elements.checkoutButton).catch(error => log.error('checkout failed:', error));
   });
 
   elements.checkoutProButton?.addEventListener('click', () => {

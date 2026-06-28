@@ -3348,7 +3348,7 @@
       }
       notify(NOTIFICATIONS.EVENTS.FORM_OPENED, formOpenedPayload);
       try {
-        const usage = await root.AMZ_PAYMENT_GATE?.consumeBookingCredit?.({
+        const usage = await root.AMZ_PAYMENT_GATE?.recordBookingUsage?.({
           jobId: context.jobId || null,
           scheduleId: context.scheduleId || context.applicationId || null,
           metadata: {
@@ -3360,14 +3360,14 @@
           },
         });
         if (!usage?.ok) {
-          log.warn('booking credit deduction failed after application form opened', {
+          log.warn('booking usage recording failed after application form opened', {
             reason: usage?.reason || 'usage-denied',
             jobId: context.jobId || null,
             scheduleId: context.scheduleId || null,
           });
         }
       } catch (error) {
-        log.warn('booking credit deduction failed after application form opened', {
+        log.warn('booking usage recording failed after application form opened', {
           message: error?.message || String(error),
           jobId: context.jobId || null,
           scheduleId: context.scheduleId || null,
@@ -3411,7 +3411,7 @@
       root.AMZ_TOASTS?.showCreditsRequiredPopup?.({
         jobId: context.jobId || null,
         scheduleId: context.scheduleId || null,
-        reason: paidGate?.reason || 'credits-required',
+        reason: paidGate?.reason || 'access-required',
       });
       observability?.finalizePendingDeactivated?.(context, {
         source: 'paid-license-denied',

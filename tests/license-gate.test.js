@@ -65,7 +65,6 @@ describe("license API", () => {
     it("normalizes the shared backend response shape", () => {
         const normalized = globalThis.AMZ_LICENSE_API.normalizeLicenseResponse({
             allowed: true,
-            credits: "3",
             isProUser: false,
             accessExpiresAt: "2026-02-01T00:00:00.000Z",
             checkoutUrl: " https://checkout.example ",
@@ -75,7 +74,6 @@ describe("license API", () => {
 
         expect(normalized).toEqual({
             allowed: true,
-            credits: 3,
             isProUser: false,
             accessExpiresAt: "2026-02-01T00:00:00.000Z",
             checkoutUrl: "https://checkout.example",
@@ -85,7 +83,7 @@ describe("license API", () => {
     });
 
     it("checks a country-specific license endpoint with normalized Amazon email", async () => {
-        mockFetchJson({ allowed: true, credits: 2, isProUser: false });
+        mockFetchJson({ allowed: true, isProUser: false, accessExpiresAt: "2026-02-01T00:00:00.000Z" });
 
         const response = await globalThis.AMZ_LICENSE_API.checkLicense({ amazonEmailId: " Paid@Example.COM " });
 
@@ -97,8 +95,8 @@ describe("license API", () => {
     });
 
     it("builds hosted checkout page URLs for both plans", () => {
-        expect(globalThis.AMZ_LICENSE_API.checkoutPageUrl({ purchaseType: "credits" })).toBe(
-            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=credits"
+        expect(globalThis.AMZ_LICENSE_API.checkoutPageUrl({ purchaseType: "access" })).toBe(
+            "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=access"
         );
         expect(globalThis.AMZ_LICENSE_API.checkoutPageUrl({ purchaseType: "pro" })).toBe(
             "https://getslotnow.com/extension-usage-tracker/checkout/amazon-warehouse-jobs-canada?plan=pro"
@@ -113,7 +111,7 @@ describe("license state", () => {
             [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
             [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "paid@example.com",
         });
-        mockFetchJson({ allowed: true, credits: 0, isProUser: true, syncIntervalMs: 60000 });
+        mockFetchJson({ allowed: true, isProUser: true, syncIntervalMs: 60000 });
 
         const state = await globalThis.AMZ_LICENSE_STATE.refresh("paid@example.com");
 
@@ -128,7 +126,6 @@ describe("license state", () => {
             [STORAGE_KEYS.LICENSE_EMAIL]: "paid@example.com",
             [STORAGE_KEYS.LICENSE_STATE]: {
                 allowed: true,
-                credits: 0,
                 isProUser: true,
                 emailId: "buyer@example.com",
                 amazonEmailId: "paid@example.com",
@@ -141,13 +138,13 @@ describe("license state", () => {
         expect(await globalThis.AMZ_LICENSE_STATE.isAllowed()).toBe(false);
     });
 
-    it("denies booking on no-credit responses without disabling free job search", async () => {
+    it("denies booking on inactive paid-access responses without disabling free job search", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const store = useLocalStore({
             [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "empty@example.com",
             [STORAGE_KEYS.ACTIVE]: true,
         });
-        mockFetchJson({ allowed: false, credits: 0, isProUser: false, message: "No credits" });
+        mockFetchJson({ allowed: false, isProUser: false, message: "No active paid access" });
 
         const state = await globalThis.AMZ_LICENSE_STATE.refresh("empty@example.com");
 
@@ -157,14 +154,13 @@ describe("license state", () => {
 });
 
 describe("payment gate usage", () => {
-    it("allows pro users without consuming credits", async () => {
+    it("allows pro users without recording usage through the backend", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         useLocalStore({
             [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
             [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "pro@example.com",
             [STORAGE_KEYS.LICENSE_STATE]: {
                 allowed: true,
-                credits: 0,
                 isProUser: true,
                 emailId: "buyer@example.com",
                 amazonEmailId: "pro@example.com",
@@ -174,7 +170,7 @@ describe("payment gate usage", () => {
         });
         globalThis.fetch = vi.fn();
 
-        const result = await globalThis.AMZ_PAYMENT_GATE.consumeForBookingAttempt({ jobId: "JOB1" });
+        const result = await globalThis.AMZ_PAYMENT_GATE.recordUsageForBookingAttempt({ jobId: "JOB1" });
 
         expect(result.ok).toBe(true);
         expect(result.skipped).toBe("pro-user");
@@ -185,26 +181,25 @@ describe("payment gate usage", () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const store = useLocalStore({
             [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
-            [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "credit@example.com",
+            [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "access@example.com",
             [STORAGE_KEYS.LICENSE_STATE]: {
                 allowed: true,
-                credits: 0,
                 isProUser: true,
                 emailId: "buyer@example.com",
-                amazonEmailId: "credit@example.com",
-                email: "credit@example.com",
+                amazonEmailId: "access@example.com",
+                email: "access@example.com",
                 expiresAt: Date.now() + 60000,
             },
         });
         globalThis.fetch = vi.fn();
 
-        const first = await globalThis.AMZ_PAYMENT_GATE.consumeForBookingAttempt({ jobId: "JOB1" });
-        const second = await globalThis.AMZ_PAYMENT_GATE.consumeForBookingAttempt({ jobId: "JOB1" });
+        const first = await globalThis.AMZ_PAYMENT_GATE.recordUsageForBookingAttempt({ jobId: "JOB1" });
+        const second = await globalThis.AMZ_PAYMENT_GATE.recordUsageForBookingAttempt({ jobId: "JOB1" });
 
         expect(first.ok).toBe(true);
-        expect(second.skipped).toBe("already-consumed");
+        expect(second.skipped).toBe("already-recorded");
         expect(first.skipped).toBe("pro-user");
         expect(globalThis.fetch).not.toHaveBeenCalled();
-        expect(Object.keys(store[STORAGE_KEYS.LICENSE_USAGE_KEYS])).toEqual(["amazon-warehouse-jobs-canada:credit@example.com:JOB1:unknown-schedule"]);
+        expect(Object.keys(store[STORAGE_KEYS.LICENSE_USAGE_KEYS])).toEqual(["amazon-warehouse-jobs-canada:access@example.com:JOB1:unknown-schedule"]);
     });
 });

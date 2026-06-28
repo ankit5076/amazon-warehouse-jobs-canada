@@ -398,7 +398,7 @@ input:checked + .slider:before { transform: translateX(15px); }
     margin: 0;
 }
 
-.credit-actions {
+.access-actions {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -483,7 +483,7 @@ input:checked + .slider:before { transform: translateX(15px); }
     text-transform: uppercase;
 }
 
-.credit-actions .checkout-button {
+.access-actions .checkout-button {
     width: 100%;
     min-height: 34px;
 }
