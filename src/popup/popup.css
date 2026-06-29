@@ -135,6 +135,47 @@ h1 #version {
     white-space: nowrap;
 }
 
+.top-access-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 7px 12px 0;
+    background: var(--surface);
+}
+
+.access-status-pill {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    min-height: 22px;
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.access-status-pill.success {
+    border-color: rgba(6, 125, 98, 0.35);
+    background: rgba(6, 125, 98, 0.08);
+    color: var(--success);
+}
+
+.access-status-pill.warning {
+    border-color: rgba(177, 39, 4, 0.25);
+    background: rgba(177, 39, 4, 0.07);
+    color: var(--danger);
+}
+
+.access-status-pill.error {
+    border-color: rgba(177, 39, 4, 0.4);
+    background: rgba(177, 39, 4, 0.1);
+    color: var(--danger);
+}
+
 .logo {
     height: 30px;
 }

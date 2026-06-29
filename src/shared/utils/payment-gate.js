@@ -34,7 +34,7 @@
     const searchScopeReady = await getSearchScopeReady();
     const license = await licenseState.loadCachedState();
     return {
-      ok: searchScopeReady,
+      ok: true,
       license,
       searchScopeReady,
     };
@@ -49,7 +49,10 @@
   }
 
   async function requireAllowed(options = {}) {
-    const license = await licenseState.getAllowedState({ allowCache: options.allowCache !== false });
+    const license = await licenseState.getAllowedState({
+      ...options,
+      allowCache: options.allowCache !== false,
+    });
     if (!licenseState.isAllowedState(license) || !licenseState.isFresh(license)) {
       return failClosed('access-required', license);
     }
@@ -81,7 +84,7 @@
   }
 
   async function recordBookingUsage(details = {}) {
-    const gate = await requireAllowed({ allowCache: true });
+    const gate = await requireAllowed({ allowCache: true, refresh: false });
     if (!gate.ok) return gate;
 
     const identity = {

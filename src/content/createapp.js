@@ -284,7 +284,7 @@
         setEnabled(true);
         return;
       }
-      root.AMZ_PAYMENT_GATE?.requireAllowed?.({ allowCache: true })
+      root.AMZ_PAYMENT_GATE?.requireAllowed?.({ allowCache: true, refresh: false })
         .then(result => setEnabled(result?.ok === true))
         .catch(() => setEnabled(false));
     }
@@ -312,7 +312,7 @@
   directApplicationMode.setEnabled(initialStorage[STORAGE_KEYS.USE_DIRECT_APPLICATION]);
   const paidGate = initialStorage[STORAGE_KEYS.ACTIVE] === true
     ? (root.AMZ_PAYMENT_GATE?.requireAllowed
-      ? await root.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true }).catch(() => null)
+      ? await root.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true, refresh: false }).catch(() => null)
       : (typeof process !== 'undefined' && process.env?.NODE_ENV === 'test' ? { ok: true } : null))
     : null;
   setEnabled(paidGate?.ok === true);

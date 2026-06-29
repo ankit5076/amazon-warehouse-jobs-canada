@@ -30,6 +30,12 @@
   }
 
   function expiryFor(response) {
+    if (response?.allowed === true) {
+      const accessExpiresAt = String(response?.accessExpiresAt || '').trim();
+      const accessExpiry = Date.parse(accessExpiresAt);
+      if (Number.isFinite(accessExpiry)) return accessExpiry;
+      return now() - 1;
+    }
     const interval = Number(response?.syncIntervalMs || api.gateConfig().defaultSyncIntervalMs || 15 * 60 * 1000);
     return now() + Math.max(60 * 1000, interval);
   }
@@ -161,7 +167,7 @@
     } catch (error) {
       const cached = await loadCachedState();
       if (
-        options.allowCache !== false &&
+        (options.allowCache !== false || options.preserveValidCacheOnFailure !== false) &&
         cached?.amazonEmailId === resolved.amazonEmailId &&
         isFresh(cached) &&
         isAllowedState(cached)
@@ -175,6 +181,7 @@
         checkoutUrl: '',
         message: error?.message || 'Unable to validate booking access.',
         syncIntervalMs: Number(api.gateConfig().defaultSyncIntervalMs || 15 * 60 * 1000),
+        checkFailed: true,
         emailId: resolved.emailId,
         amazonEmailId: resolved.amazonEmailId,
         email: resolved.amazonEmailId,
@@ -188,6 +195,12 @@
     const identity = await resolveIdentity(options);
     if (!identity.amazonEmailId) return null;
     const cached = await loadCachedState();
+    if (
+      options.refresh === false &&
+      cached?.amazonEmailId === identity.amazonEmailId
+    ) {
+      return cached;
+    }
     if (
       options.allowCache !== false &&
       cached?.amazonEmailId === identity.amazonEmailId &&

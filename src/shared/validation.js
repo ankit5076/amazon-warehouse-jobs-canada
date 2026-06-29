@@ -22,7 +22,7 @@
   }
 
   async function disableAutomation() {
-    await storage.setLocal({ [STORAGE_KEYS.ACTIVE]: false });
+    return false;
   }
 
   async function disableAutomationIfCurrentUsername(username) {

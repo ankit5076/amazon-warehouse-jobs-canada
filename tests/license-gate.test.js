@@ -125,11 +125,12 @@ describe("license API", () => {
 describe("license state", () => {
     it("caches valid paid license state until expiry", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const future = new Date(Date.now() + 86400000).toISOString();
         const store = useLocalStore({
             [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
             [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "paid@example.com",
         });
-        mockFetchJson({ allowed: true, isProUser: true, syncIntervalMs: 60000 });
+        mockFetchJson({ allowed: true, isProUser: true, accessExpiresAt: future, syncIntervalMs: 60000 });
 
         const state = await globalThis.AMZ_LICENSE_STATE.refresh("paid@example.com");
 
@@ -174,6 +175,7 @@ describe("license state", () => {
 describe("payment gate usage", () => {
     it("allows pro users without recording usage through the backend", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const future = new Date(Date.now() + 86400000).toISOString();
         useLocalStore({
             [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
             [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "pro@example.com",
@@ -183,6 +185,7 @@ describe("payment gate usage", () => {
                 emailId: "buyer@example.com",
                 amazonEmailId: "pro@example.com",
                 email: "pro@example.com",
+                accessExpiresAt: future,
                 expiresAt: Date.now() + 60000,
             },
         });
@@ -197,6 +200,7 @@ describe("payment gate usage", () => {
 
     it("does not call usage for active unlimited paid access", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const future = new Date(Date.now() + 86400000).toISOString();
         const store = useLocalStore({
             [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
             [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "access@example.com",
@@ -206,6 +210,7 @@ describe("payment gate usage", () => {
                 emailId: "buyer@example.com",
                 amazonEmailId: "access@example.com",
                 email: "access@example.com",
+                accessExpiresAt: future,
                 expiresAt: Date.now() + 60000,
             },
         });
@@ -219,5 +224,52 @@ describe("payment gate usage", () => {
         expect(first.skipped).toBe("pro-user");
         expect(globalThis.fetch).not.toHaveBeenCalled();
         expect(Object.keys(store[STORAGE_KEYS.LICENSE_USAGE_KEYS])).toEqual(["amazon-warehouse-jobs-canada:access@example.com:JOB1:unknown-schedule"]);
+    });
+
+    it("uses cached access for booking gates without checking the backend", async () => {
+        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const future = new Date(Date.now() + 86400000).toISOString();
+        useLocalStore({
+            [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
+            [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "access@example.com",
+            [STORAGE_KEYS.LICENSE_STATE]: {
+                allowed: true,
+                isProUser: true,
+                emailId: "buyer@example.com",
+                amazonEmailId: "access@example.com",
+                email: "access@example.com",
+                accessExpiresAt: future,
+                expiresAt: Date.now() + 60000,
+            },
+        });
+        globalThis.fetch = vi.fn();
+
+        const result = await globalThis.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true, refresh: false });
+
+        expect(result.ok).toBe(true);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("blocks locally expired cached access without checking the backend", async () => {
+        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        useLocalStore({
+            [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
+            [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "access@example.com",
+            [STORAGE_KEYS.LICENSE_STATE]: {
+                allowed: true,
+                isProUser: true,
+                emailId: "buyer@example.com",
+                amazonEmailId: "access@example.com",
+                email: "access@example.com",
+                accessExpiresAt: new Date(Date.now() - 86400000).toISOString(),
+                expiresAt: Date.now() - 1,
+            },
+        });
+        globalThis.fetch = vi.fn();
+
+        const result = await globalThis.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true, refresh: false });
+
+        expect(result.ok).toBe(false);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 });

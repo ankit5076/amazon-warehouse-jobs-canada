@@ -73,7 +73,12 @@ describe("AMZ_VALIDATION paid-license adapter", () => {
     it("allows a fresh paid-access license", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         useLocalStore({ [STORAGE_KEYS.LICENSE_EMAIL]: "paid@example.com" });
-        mockFetchLicense({ allowed: true, isProUser: false, syncIntervalMs: 60000 });
+        mockFetchLicense({
+            allowed: true,
+            isProUser: false,
+            accessExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+            syncIntervalMs: 60000,
+        });
 
         const policy = await globalThis.AMZ_VALIDATION.refreshFromServer("paid@example.com");
 
@@ -83,7 +88,7 @@ describe("AMZ_VALIDATION paid-license adapter", () => {
         expect(globalThis.AMZ_VALIDATION.isAllowedForUsername("paid@example.com")).toBe(true);
     });
 
-    it("disables activation when the backend denies paid access", async () => {
+    it("keeps activation user-controlled when the backend denies paid access", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const store = useLocalStore({
             [STORAGE_KEYS.LICENSE_EMAIL]: "empty@example.com",
@@ -94,17 +99,17 @@ describe("AMZ_VALIDATION paid-license adapter", () => {
         const policy = await globalThis.AMZ_VALIDATION.refreshFromServer("empty@example.com");
 
         expect(policy.valid).toBe(false);
-        expect(store[STORAGE_KEYS.ACTIVE]).toBe(false);
+        expect(store[STORAGE_KEYS.ACTIVE]).toBe(true);
         expect(globalThis.AMZ_VALIDATION.isAllowed()).toBe(false);
     });
 
-    it("keeps automation fail-closed when no license email exists", async () => {
+    it("keeps access fail-closed without turning activation off when no license email exists", async () => {
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const store = useLocalStore({ [STORAGE_KEYS.ACTIVE]: true });
 
         const policy = await globalThis.AMZ_VALIDATION.refreshFromServer();
 
         expect(policy.valid).toBe(false);
-        expect(store[STORAGE_KEYS.ACTIVE]).toBe(false);
+        expect(store[STORAGE_KEYS.ACTIVE]).toBe(true);
     });
 });

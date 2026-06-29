@@ -3400,7 +3400,7 @@
     }
 
     const paidGate = root.AMZ_PAYMENT_GATE?.requireAllowed
-      ? await root.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true })
+      ? await root.AMZ_PAYMENT_GATE.requireAllowed({ allowCache: true, refresh: false })
       : (typeof process !== 'undefined' && process.env?.NODE_ENV === 'test' ? { ok: true } : { ok: false });
     if (!paidGate.ok) {
       log.warn('direct booking blocked because paid license is not valid', {

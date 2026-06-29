@@ -1,0 +1,15 @@
+This extension works only on supported Amazon Canada hiring job-search/application pages.
+
+Test flow:
+1. Install the extension.
+2. Open the extension popup on a non-Amazon page and confirm activation is blocked.
+3. Open a supported Amazon Canada hiring job-search page.
+4. Enter a buyer email and Amazon job-search email.
+5. Choose either 30-day access or annual/pro access.
+6. The extension opens Dodo hosted checkout.
+7. After payment, return to the Amazon job-search page and activate the extension.
+8. The extension checks paid access through https://getslotnow.com/extension-usage-tracker and only proceeds when access is valid.
+
+Payment is handled by Dodo hosted checkout. Supabase is used only by the backend service and is never called directly by the extension.
+
+This extension is not affiliated with Amazon.

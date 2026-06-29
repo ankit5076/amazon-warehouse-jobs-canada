@@ -143,7 +143,6 @@
   async function clearAdminSession(options = {}) {
     const updates = {
       [STORAGE_KEYS.ADMIN_SESSION_TOKEN]: '',
-      [STORAGE_KEYS.ACTIVE]: false,
     };
     if (options.clearUsername === true) {
       updates[STORAGE_KEYS.OPERATOR_USERNAME] = '';

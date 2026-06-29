@@ -105,8 +105,7 @@
     "https://hiring.amazon.com/*",
     "*://auth.hiring.amazon.com/*",
     "*://auth.hiring.amazon.ca/*",
-    "https://getslotnow.com/*",
-    "http://localhost:8080/*"
+    "https://getslotnow.com/*"
   ],
   "icons": {
     "16": "assets/images/canada-flag.png",
@@ -125,7 +124,7 @@
     "scripting"
   ],
   "update_url": "https://clients2.google.com/service/update2/crx",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "web_accessible_resources": [
     {
       "matches": [

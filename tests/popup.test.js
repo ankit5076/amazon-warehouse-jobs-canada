@@ -25,6 +25,7 @@ function installPopupDom() {
             <div class="toggle-section">
               <input id="activate" type="checkbox">
             </div>
+            <span id="access-status-pill"></span>
             <input id="use_direct_application" type="checkbox">
             <strong id="direct_application_mode_label"></strong>
             <div class="access-actions">
@@ -195,34 +196,29 @@ describe("paid popup gate", () => {
         expect(html).not.toContain("admin_login_btn");
     });
 
-    it("enables activation with search scope even before a valid paid license", async () => {
+    it("keeps activation enabled even before search scope or paid access", async () => {
         loadPopupScripts();
-        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
-        useLocalStore({
-            [STORAGE_KEYS.SELECTED_CITY]: "Sidney",
-            [STORAGE_KEYS.CITY_TAGS]: ["Sidney"],
-        });
+        useLocalStore();
         document.dispatchEvent(new Event("DOMContentLoaded"));
         await flushPopup();
 
         expect(document.getElementById("activate").disabled).toBe(false);
         expect(document.getElementById("license-status").textContent).toMatch(/Search is free/);
+        expect(document.getElementById("access-status-pill").textContent).toBe("Access unknown");
     });
 
-    it("enables activation after license validation and search scope are valid", async () => {
+    it("activates after denied license validation without disabling the toggle", async () => {
         loadPopupScripts();
         const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
         const store = useLocalStore({
             [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
             [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "amazon@example.com",
-            [STORAGE_KEYS.SELECTED_CITY]: "Sidney",
-            [STORAGE_KEYS.CITY_TAGS]: ["Sidney"],
         });
         globalThis.fetch = vi.fn(() =>
             Promise.resolve({
                 ok: true,
                 status: 200,
-                json: () => Promise.resolve({ allowed: true, isProUser: false, syncIntervalMs: 60000 }),
+                json: () => Promise.resolve({ allowed: false, isProUser: false, message: "No active paid access" }),
             })
         );
 
@@ -230,11 +226,61 @@ describe("paid popup gate", () => {
         await flushPopup();
 
         expect(document.getElementById("activate").disabled).toBe(false);
+        expect(document.getElementById("access-status-pill").textContent).toBe("No active access");
         document.getElementById("activate").checked = true;
         document.getElementById("activate").dispatchEvent(new Event("change", { bubbles: true }));
         await flushPopup();
 
         expect(store[STORAGE_KEYS.ACTIVE]).toBe(true);
+    });
+
+    it("shows active access and manually refreshes the backend license", async () => {
+        loadPopupScripts();
+        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        const future = new Date(Date.now() + 86400000).toISOString();
+        useLocalStore({
+            [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
+            [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "amazon@example.com",
+        });
+        globalThis.fetch = vi.fn(() =>
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({
+                    allowed: true,
+                    isProUser: true,
+                    accessExpiresAt: future,
+                    message: "Access active",
+                }),
+            })
+        );
+
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+        await flushPopup();
+        expect(document.getElementById("access-status-pill").textContent).toMatch(/Access active until/);
+        const initialChecks = globalThis.fetch.mock.calls.filter(call => String(call[0]).includes("/license/check")).length;
+
+        document.getElementById("refresh_info").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        await flushPopup();
+
+        const nextChecks = globalThis.fetch.mock.calls.filter(call => String(call[0]).includes("/license/check")).length;
+        expect(nextChecks).toBe(initialChecks + 1);
+    });
+
+    it("shows check failed without disabling active cached access", async () => {
+        loadPopupScripts();
+        const { STORAGE_KEYS } = globalThis.AMZ_CONSTANTS;
+        useLocalStore({
+            [STORAGE_KEYS.LICENSE_BUYER_EMAIL]: "buyer@example.com",
+            [STORAGE_KEYS.LICENSE_AMAZON_EMAIL]: "amazon@example.com",
+        });
+        globalThis.fetch = vi.fn(() => Promise.reject(new Error("offline")));
+
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+        await flushPopup();
+
+        expect(document.getElementById("activate").disabled).toBe(false);
+        expect(document.getElementById("access-status-pill").textContent).toBe("Check failed");
     });
 
     it("opens hosted checkout pages without collecting emails in the popup", async () => {

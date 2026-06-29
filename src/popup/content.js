@@ -16,7 +16,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const runtimeControlUtils = globalThis.AMZ_RUNTIME_CONTROLS;
   const licenseState = globalThis.AMZ_LICENSE_STATE;
   const licenseApi = globalThis.AMZ_LICENSE_API;
-  const paymentGate = globalThis.AMZ_PAYMENT_GATE;
   const log = globalThis.AMZ_LOGGER.create('[popup]', {
     workflow: 'popup-settings',
     source: 'popup/content.js',
@@ -29,6 +28,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let cityCoordinates = runtimeControls.cityCoordinates || {};
   let resetInProgress = false;
   let currentLicense = null;
+  let licenseRefreshPromise = null;
 
   const elements = {
     city: document.getElementById('city'),
@@ -43,6 +43,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     checkoutButton: document.getElementById('checkout_btn'),
     checkoutProButton: document.getElementById('checkout_pro_btn'),
     licenseStatus: document.getElementById('license-status'),
+    accessStatusPill: document.getElementById('access-status-pill'),
     authenticatedSections: Array.from(document.querySelectorAll('[data-authenticated-section]')),
     addAllCitiesButton: document.getElementById('add-all-cities'),
     cityScopeStatus: document.getElementById('city-scope-status'),
@@ -86,6 +87,36 @@ document.addEventListener('DOMContentLoaded', async () => {
       return license.accessExpiresAt ? `Unlimited booking active until ${new Date(license.accessExpiresAt).toLocaleDateString()}.` : 'Unlimited booking active.';
     }
     return license.message || 'Search is free. Buy access to book matched jobs.';
+  }
+
+  function formatAccessDate(value) {
+    const date = new Date(value || '');
+    if (!Number.isFinite(date.getTime())) return '';
+    return date.toLocaleDateString();
+  }
+
+  function accessPillState(license) {
+    if (!license) {
+      return { text: 'Access unknown', tone: 'unknown' };
+    }
+    if (licenseState.isAllowedState(license) && licenseState.isFresh(license)) {
+      const date = formatAccessDate(license.accessExpiresAt);
+      return {
+        text: date ? `Access active until ${date}` : 'Access active',
+        tone: 'success',
+      };
+    }
+    if (license.checkFailed === true) {
+      return { text: 'Check failed', tone: 'error' };
+    }
+    return { text: 'No active access', tone: 'warning' };
+  }
+
+  function updateAccessStatusPill(license) {
+    if (!elements.accessStatusPill) return;
+    const state = accessPillState(license);
+    elements.accessStatusPill.textContent = state.text;
+    elements.accessStatusPill.className = ['access-status-pill', state.tone].filter(Boolean).join(' ');
   }
 
   function normalizeSelectOption(option) {
@@ -377,19 +408,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function refreshActivationGate() {
-    const identity = await storedOrPopupIdentity();
     const licenseAllowed = licenseState.isAllowedState(currentLicense) && licenseState.isFresh(currentLicense);
-    const searchScopeReady = await paymentGate.getSearchScopeReady();
-    const canActivate = searchScopeReady;
 
     setPaidUiEnabled();
     if (elements.activate) {
-      elements.activate.disabled = !canActivate;
-      elements.activate.title = canActivate ? '' : 'Select a city or All cities';
-    }
-    if (!canActivate && elements.activate?.checked) {
-      elements.activate.checked = false;
-      await state.setActive(false);
+      elements.activate.disabled = false;
+      elements.activate.title = '';
     }
     if (elements.checkoutButton) {
       elements.checkoutButton.disabled = false;
@@ -400,6 +424,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.checkoutProButton.hidden = false;
     }
     setLicenseStatus(formatLicenseMessage(currentLicense), licenseAllowed ? 'success' : 'warning');
+    updateAccessStatusPill(currentLicense);
   }
 
   async function refreshLicense(options = {}) {
@@ -412,19 +437,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       await refreshActivationGate();
       return null;
     }
+    if (licenseRefreshPromise) {
+      const state = await licenseRefreshPromise;
+      await refreshActivationGate();
+      return state;
+    }
     if (elements.validateButton) {
       elements.validateButton.disabled = true;
       elements.validateButton.innerText = 'Validating...';
     }
+    licenseRefreshPromise = licenseState.refresh(identity, { allowCache: options.allowCache !== false })
+      .then(state => {
+        currentLicense = state;
+        setLicenseStatus(formatLicenseMessage(currentLicense), licenseState.isAllowedState(currentLicense) ? 'success' : 'warning');
+        return currentLicense;
+      })
+      .catch(error => {
+        currentLicense = null;
+        setLicenseStatus(error?.message || 'Unable to validate license.', 'error');
+        return null;
+      });
     try {
-      currentLicense = await licenseState.refresh(identity, { allowCache: options.allowCache !== false });
-      setLicenseStatus(formatLicenseMessage(currentLicense), licenseState.isAllowedState(currentLicense) ? 'success' : 'warning');
-      return currentLicense;
-    } catch (error) {
-      currentLicense = null;
-      setLicenseStatus(error?.message || 'Unable to validate license.', 'error');
-      return null;
+      return await licenseRefreshPromise;
     } finally {
+      licenseRefreshPromise = null;
       if (elements.validateButton) elements.validateButton.innerText = 'Validate';
       await refreshActivationGate();
     }
@@ -512,7 +548,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await refreshActivationGate();
 
     if (savedEmail.amazonEmailId) {
-      await refreshLicense({ amazonEmailId: savedEmail.amazonEmailId, allowCache: true });
+      await refreshLicense({ amazonEmailId: savedEmail.amazonEmailId, allowCache: false });
     }
   }
 
@@ -545,8 +581,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         getIntervalDefaultValueForUnit(elements.intervalUnit?.value);
     }
     if (changes[STORAGE_KEYS.ACTIVE] && elements.activate) {
-      const gate = await paymentGate.canActivate({ allowCache: true });
-      elements.activate.checked = changes[STORAGE_KEYS.ACTIVE].newValue === true && gate.ok === true;
+      elements.activate.checked = changes[STORAGE_KEYS.ACTIVE].newValue === true;
     }
     if (changes[STORAGE_KEYS.LOG_MODE] && elements.logMode) {
       setLogModeUi(changes[STORAGE_KEYS.LOG_MODE].newValue);
@@ -646,16 +681,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!event.target.checked) {
       const active = await state.setActive(false);
       await notifyActiveTab(active);
-      return;
-    }
-
-    const gate = await paymentGate.canActivate({ allowCache: true });
-    if (!gate.ok) {
-      event.preventDefault();
-      event.target.checked = false;
-      await state.setActive(false);
-      setLicenseStatus('Select a city or All cities before activating.', 'warning');
-      await refreshActivationGate();
       return;
     }
 

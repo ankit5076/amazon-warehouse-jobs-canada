@@ -378,7 +378,6 @@
 
   const BACKEND = Object.freeze({
     BASE_URL: 'https://getslotnow.com/administrator-api/api/amazon-warehouse-jobs-canada',
-    // BASE_URL: 'http://localhost:8080/api/amazon-warehouse-jobs-canada',
     PRODUCT_ID: 'amazon-warehouse-jobs-canada',
     PRODUCT_NAME: 'Amazon Warehouse Jobs Canada',
     COUNTRY: 'Canada',

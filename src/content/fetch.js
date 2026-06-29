@@ -60,6 +60,7 @@
   let authRedirectInProgress = false;
   let authProbeRefreshPromise = null;
   let authProbeDeniedRetryPageUrl = '';
+  let lastAmazonSignInLicenseSyncKey = '';
   const JOB_DETAIL_NAVIGATION_FALLBACK_DELAY_MS = 1200;
 
   function applyIntervalSettings(source = {}) {
@@ -176,6 +177,28 @@
     pollerState.runtimeAllowed = true;
     pollerState.runtimePolicyCheckedAt = Date.now();
     return true;
+  }
+
+  async function syncLicenseAfterAmazonSignIn(reason) {
+    const helpers = root.AMZ_LICENSE_STATE;
+    if (!helpers?.getStoredEmails || !helpers?.refresh) return;
+    const identity = await helpers.getStoredEmails();
+    if (!identity.amazonEmailId) return;
+    const syncKey = `${identity.amazonEmailId}:${reason || 'amazon-sign-in'}`;
+    if (lastAmazonSignInLicenseSyncKey === syncKey) return;
+    lastAmazonSignInLicenseSyncKey = syncKey;
+    try {
+      await helpers.refresh(identity, { allowCache: false });
+      log.info('paid access synced after Amazon sign-in', {
+        amazonEmailId: identity.amazonEmailId,
+        reason,
+      });
+    } catch (error) {
+      log.warn('paid access sync after Amazon sign-in failed', {
+        reason,
+        error: error?.message || String(error),
+      });
+    }
   }
 
   async function ensureSelectedCityTag() {
@@ -787,7 +810,7 @@
     }
     if (!matchedJob) return null;
 
-    const paidGate = await root.AMZ_PAYMENT_GATE?.requireAllowed?.({ allowCache: false });
+    const paidGate = await root.AMZ_PAYMENT_GATE?.requireAllowed?.({ allowCache: true, refresh: false });
     if (!paidGate?.ok) {
       log.warn('matched job blocked by paid license gate', {
         jobId: matchedJob.jobId || null,
@@ -1189,6 +1212,7 @@
         if (root.AMZ_URL.isJobSearchPage()) {
           await retryDeniedAmazonAuthProbeOnce('auth-probe-storage-change');
           if (isAmazonSessionAuthenticated()) {
+            await syncLicenseAfterAmazonSignIn('auth-probe-retry');
             await handlePageNavigation();
             return;
           }
@@ -1205,6 +1229,7 @@
         root.AMZ_URL.isJobSearchPage()
       ) {
         authProbeDeniedRetryPageUrl = '';
+        await syncLicenseAfterAmazonSignIn('auth-probe-storage-change');
         await handlePageNavigation();
       }
     }
